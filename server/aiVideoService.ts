@@ -2,7 +2,7 @@ import path from "path";
 import fs from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { readDb, writeDb, STORAGE_DIRS } from "./storage";
 import { ffmpegService } from "./ffmpeg";
 import { billingService } from "./billing";
@@ -277,16 +277,23 @@ export class AIVideoService {
     aspectRatio?: "9:16" | "16:9" | "1:1";
     tone?: string;
     selectedReferenceIds?: string[];
+    platform?: string;
     genAIClient?: GoogleGenAI | null;
-  }): Promise<{ title: string; shots: StoryboardShot[]; costEstimate: number }> {
+  }): Promise<{ title: string; shots: StoryboardShot[]; costEstimate: number; source: "gemini" | "sample"; notice?: string }> {
     const {
       prompt,
       targetDuration = 30,
       aspectRatio = "9:16",
       tone = "Cinematic & Dramatic",
       selectedReferenceIds = [],
+      platform,
       genAIClient,
     } = params;
+    const platformLabel =
+      platform ||
+      (aspectRatio === "16:9" ? "YouTube (landscape)" : aspectRatio === "1:1" ? "Instagram / Facebook feed" : "YouTube Shorts / TikTok / Reels");
+    let source: "gemini" | "sample" = "gemini";
+    let notice: string | undefined;
 
     const refs = this.getReferences();
     const activeRefs = refs.filter((r) => selectedReferenceIds.includes(r.id));
@@ -328,56 +335,90 @@ Output strict JSON object matching:
   "shots": [ ... ]
 }`;
 
+      const shotSchema = {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          prompt: { type: Type.STRING, description: "Visual description of the scene" },
+          dialogue: { type: Type.STRING, description: "Voiceover / spoken line for this scene" },
+          duration: { type: Type.INTEGER, description: "Seconds" },
+          cameraAngle: { type: Type.STRING },
+          cameraMovement: { type: Type.STRING },
+          voicePersona: { type: Type.STRING },
+          soundEffect: { type: Type.STRING },
+          ambience: { type: Type.STRING },
+          onScreenText: { type: Type.STRING },
+          transition: { type: Type.STRING },
+        },
+        required: ["title", "prompt", "dialogue", "duration"],
+      };
+      let response;
       try {
-        const response = await genAIClient.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: `Create a multi-shot storyboard for concept: "${prompt.trim()}". Tone: "${tone}". Total duration: ${targetDuration}s. Aspect ratio: ${aspectRatio}.`,
+        response = await genAIClient.models.generateContent({
+          model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+          contents: `Create a multi-shot storyboard for this video request: "${prompt.trim()}". Platform: ${platformLabel}. Tone: "${tone}". Total duration: ${targetDuration}s. Aspect ratio: ${aspectRatio}.`,
           config: {
             systemInstruction,
             responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                shots: { type: Type.ARRAY, items: shotSchema },
+              },
+              required: ["title", "shots"],
+            },
           },
         });
-
-        if (response.text) {
-          const parsed = JSON.parse(response.text);
-          if (parsed && Array.isArray(parsed.shots) && parsed.shots.length > 0) {
-            title = parsed.title || title;
-            generatedShots = parsed.shots.map((s: any, idx: number) => ({
-              id: `shot_${Date.now()}_${idx + 1}`,
-              shotNumber: idx + 1,
-              title: s.title || `Shot ${idx + 1}`,
-              prompt: s.prompt || prompt,
-              duration: Number(s.duration) || 6,
-              cameraAngle: s.cameraAngle || "eye_level",
-              cameraMovement: s.cameraMovement || (idx % 2 === 0 ? "push_in" : "pan_left"),
-              referenceIds: selectedReferenceIds,
-              audio: {
-                dialogue: s.dialogue || s.voiceover || "",
-                voicePersona: s.voicePersona || "Marcus - Cinematic Trailer",
-                soundEffect: s.soundEffect || "Whoosh Swoop",
-                ambience: s.ambience || "Cinematic Strings",
-                dialogueVolume: 90,
-                sfxVolume: 60,
-                ambienceVolume: 35,
-              },
-              onScreenText: s.onScreenText || "",
-              transition: s.transition || "Cross Dissolve",
-              versions: [],
-              activeVersionIndex: 0,
-              status: "idle",
-              costEstimate: parseFloat(((Number(s.duration) || 6) * 0.05).toFixed(2)),
-            }));
-          }
-        }
       } catch (err: any) {
-        console.warn("AI Storyboard generation fallback triggered:", err.message);
+        console.error("Gemini storyboard call failed:", err?.message || err);
+        throw new Error("The AI couldn't generate your script right now. Please try again in a moment.");
       }
+
+      let parsed: any = null;
+      try {
+        parsed = response?.text ? JSON.parse(response.text) : null;
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || !Array.isArray(parsed.shots) || parsed.shots.length === 0) {
+        throw new Error("The AI returned an empty or invalid script. Please try again.");
+      }
+      title = parsed.title || title;
+      generatedShots = parsed.shots.map((s: any, idx: number) => ({
+        id: `shot_${Date.now()}_${idx + 1}`,
+        shotNumber: idx + 1,
+        title: s.title || `Shot ${idx + 1}`,
+        prompt: s.prompt || prompt,
+        duration: Number(s.duration) || 6,
+        cameraAngle: s.cameraAngle || "eye_level",
+        cameraMovement: s.cameraMovement || (idx % 2 === 0 ? "push_in" : "pan_left"),
+        referenceIds: selectedReferenceIds,
+        audio: {
+          dialogue: s.dialogue || s.voiceover || "",
+          voicePersona: s.voicePersona || "Marcus - Cinematic Trailer",
+          soundEffect: s.soundEffect || "Whoosh Swoop",
+          ambience: s.ambience || "Cinematic Strings",
+          dialogueVolume: 90,
+          sfxVolume: 60,
+          ambienceVolume: 35,
+        },
+        onScreenText: s.onScreenText || "",
+        transition: s.transition || "Cross Dissolve",
+        versions: [],
+        activeVersionIndex: 0,
+        status: "idle",
+        costEstimate: parseFloat(((Number(s.duration) || 6) * 0.05).toFixed(2)),
+      }));
     }
 
-    // High quality contextual fallback if Gemini unavailable - strictly derived from prompt and tone
+    // SAMPLE FALLBACK: only used when no GEMINI_API_KEY is configured. Clearly labelled as a template,
+    // never used to hide a failed AI call (failures throw above and are shown to the user).
     if (!generatedShots || generatedShots.length === 0) {
+      source = "sample";
+      notice = "AI is not connected (no GEMINI_API_KEY), so this is a sample template, not an AI-written script.";
       const cleanPrompt = prompt.trim();
-      title = `${cleanPrompt.slice(0, 32)} (${tone})`;
+      title = `[Sample template] ${cleanPrompt.slice(0, 32)}`;
 
       // Extract subject keywords from prompt
       const words = cleanPrompt.replace(/[^\w\s-]/g, "").split(/\s+/).filter(Boolean);
@@ -482,6 +523,8 @@ Output strict JSON object matching:
       title,
       shots: generatedShots,
       costEstimate: totalCost,
+      source,
+      notice,
     };
   }
 

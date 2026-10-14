@@ -364,7 +364,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
           selectedReferenceIds,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ success: false, error: `Server error (${res.status})` }));
       if (data.success && Array.isArray(data.shots) && data.shots.length > 0) {
         // Replace old scenes atomically only on verified success
         setVideoTitle(data.title || videoTitle);
@@ -372,6 +372,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         setCostEstimate(data.costEstimate || 1.5);
         setExpandedShotId(data.shots[0].id);
         setCurrentStep("storyboard");
+        if (data.source === "sample") {
+          setErrorNotice(data.notice || "AI is not connected, so this is a sample template, not an AI-written script.");
+        }
       } else {
         // Preserve previous draft on error
         if (previousDraftShotsRef.current.length > 0) {

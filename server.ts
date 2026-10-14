@@ -2193,21 +2193,52 @@ app.delete("/api/ai/references/:id", (req, res) => {
 });
 
 // 3. Generate Multi-Shot Storyboard
+const STORYBOARD_CREDIT_COST = 5;
 app.post("/api/ai/generate-storyboard", async (req, res) => {
+  let reservationId: string | undefined;
   try {
-    const { prompt, targetDuration, aspectRatio, selectedReferenceIds } = req.body;
+    const { prompt, targetDuration, aspectRatio, selectedReferenceIds, tone, platform } = req.body;
     if (!prompt) {
       return res.status(400).json({ success: false, error: "Prompt is required." });
+    }
+    const client = getGenAI();
+    // Only real AI generations cost credits; the no-key sample template is free.
+    if (client) {
+      const credit = billingService.reserveUsage({
+        operationType: "ai_generation",
+        estimatedQuantity: STORYBOARD_CREDIT_COST,
+        unit: "credits",
+      });
+      if (!credit.allowed) {
+        return res.status(402).json({
+          success: false,
+          outOfCredits: true,
+          error: `You're out of AI credits. Generating a script costs ${STORYBOARD_CREDIT_COST} credits and you have ${credit.remaining ?? 0} left. Upgrade your plan or buy a credit pack to continue.`,
+        });
+      }
+      reservationId = credit.reservationId;
     }
     const result = await aiVideoService.generateStoryboard({
       prompt,
       targetDuration: Number(targetDuration) || 30,
       aspectRatio: aspectRatio || "9:16",
+      tone: tone || undefined,
+      platform: platform || undefined,
       selectedReferenceIds: selectedReferenceIds || [],
-      genAIClient: getGenAI(),
+      genAIClient: client,
     });
-    res.json({ success: true, ...result });
+    if (reservationId) {
+      billingService.reconcileUsage({
+        reservationId,
+        actualQuantity: STORYBOARD_CREDIT_COST,
+        operationDetail: "ai_prompt_to_video",
+        metadata: { videoTitle: result.title },
+      });
+      reservationId = undefined;
+    }
+    res.json({ success: true, creditsUsed: client ? STORYBOARD_CREDIT_COST : 0, ...result });
   } catch (err: any) {
+    if (reservationId) billingService.releaseReservation(reservationId, "Storyboard generation failed");
     console.error("generate-storyboard error:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to generate storyboard" });
   }
