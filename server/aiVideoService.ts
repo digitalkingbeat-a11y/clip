@@ -526,6 +526,7 @@ Output strict JSON object matching:
     }
 
     const ffmpegArgs: string[] = ["-y"];
+    let tempSubtitleFile = "";
 
     if (hasSampleSource) {
       // Use real sample video clip, trimmed to duration and reframed
@@ -550,7 +551,21 @@ Output strict JSON object matching:
         outRenderPath
       );
     } else {
-      // Generate synthetic video clip with dynamic color background and audio tone
+      // No video model connected: render a preview card that shows the shot's
+      // title and voiceover line (burned in via libass) over silent audio,
+      // instead of a blank frame with a test beep.
+      const cardLines = [shot.title, shot.audio?.dialogue || shot.onScreenText || ""]
+        .map((t) => String(t || "").replace(/[\r\n{}]+/g, " ").trim())
+        .filter(Boolean);
+      let cardFilter = "";
+      if (cardLines.length > 0) {
+        const subPath = outRenderPath.replace(/\.mp4$/, ".srt");
+        const end = new Date(shotDuration * 1000).toISOString().substring(11, 23).replace(".", ",");
+        fs.writeFileSync(subPath, `1\n00:00:00,000 --> ${end}\n${cardLines.join("\n")}\n`);
+        tempSubtitleFile = subPath;
+        const escaped = subPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+        cardFilter = `subtitles='${escaped}':force_style='Fontsize=14,Alignment=10,MarginL=20,MarginR=20,Outline=1,Shadow=0,PrimaryColour=&H00FFFFFF'`;
+      }
       ffmpegArgs.push(
         "-f",
         "lavfi",
@@ -559,7 +574,10 @@ Output strict JSON object matching:
         "-f",
         "lavfi",
         "-i",
-        `sine=f=440:d=${shotDuration}`,
+        `anullsrc=r=44100:cl=stereo`,
+        "-t",
+        shotDuration.toFixed(2),
+        ...(cardFilter ? ["-vf", cardFilter] : []),
         "-c:v",
         "libx264",
         "-preset",
@@ -595,6 +613,8 @@ Output strict JSON object matching:
         outRenderPath,
       ]);
     }
+
+    if (tempSubtitleFile && fs.existsSync(tempSubtitleFile)) fs.unlinkSync(tempSubtitleFile);
 
     // Generate thumbnail
     try {
