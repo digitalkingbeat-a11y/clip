@@ -8,17 +8,18 @@ import { ffmpegService } from "./ffmpeg";
 /**
  * Google Veo (Gemini API) configuration. One place for model, price and credit cost.
  * Price source: ai.google.dev/gemini-api/docs/pricing (checked 2026-10-14):
- * Veo 3.1 Fast, 720p, with audio = $0.10 per second of generated video.
+ * Veo 3.1 Lite (veo-3.1-lite-generate-preview), 720p, with audio = $0.05 per second ($0.08 at 1080p).
+ * Override the model with VEO_MODEL (e.g. veo-3.1-fast-generate-preview at $0.10/s; raise credits to match).
  */
 export const VEO_CONFIG = {
-  model: process.env.VEO_MODEL || "veo-3.1-fast-generate-preview",
+  model: process.env.VEO_MODEL || "veo-3.1-lite-generate-preview",
   resolution: "720p",
-  googlePriceUsdPerSecond: 0.1,
+  googlePriceUsdPerSecond: Number(process.env.VEO_PRICE_USD_PER_SECOND || 0.05),
   // Veo only produces 4, 6 or 8 second clips; we bill the generated length.
   allowedDurations: [4, 6, 8] as const,
-  // ClipFlow credits charged per generated Veo second (a 4s shot = 8 credits, 8s shot = 16).
-  // Compare: a whole AI script costs 5 credits, a quick-preview shot is free.
-  creditsPerSecond: 2,
+  // ClipFlow credits per generated Veo second (Lite: 4s shot = 4 credits, 8s = 8).
+  // Same ratio as before ($0.10/s Fast = 2 credits/s). Stock footage and quick preview are free.
+  creditsPerSecond: Number(process.env.VEO_CREDITS_PER_SECOND || 1),
   pollIntervalMs: Number(process.env.VEO_POLL_INTERVAL_MS || 10000),
   maxSubmitAttempts: 3,
   maxPollErrors: 10,
