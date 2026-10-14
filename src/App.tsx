@@ -327,8 +327,25 @@ export default function App() {
     return null;
   });
   const [authModalMode, setAuthModalMode] = useState<"signin" | "signup">("signin");
-  const [legalPage, setLegalPage] = useState<LegalPageId | null>(null);
-  const openLegal = (page: LegalPageId) => setLegalPage(page);
+  const legalFromPath = (): LegalPageId | null => {
+    const seg = window.location.pathname.replace(/^\/+|\/+$/g, "").toLowerCase();
+    return seg === "privacy" || seg === "terms" || seg === "contact" ? seg : null;
+  };
+  const [legalPage, setLegalPage] = useState<LegalPageId | null>(legalFromPath);
+  const openLegal = (page: LegalPageId) => {
+    if (window.location.pathname !== `/${page}`) window.history.pushState({}, "", `/${page}`);
+    setLegalPage(page);
+    window.scrollTo(0, 0);
+  };
+  const closeLegal = () => {
+    if (legalFromPath()) window.history.pushState({}, "", "/");
+    setLegalPage(null);
+  };
+  useEffect(() => {
+    const onPop = () => setLegalPage(legalFromPath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const enterDemo = () => {
     localStorage.setItem("clipflow_demo_mode", "1");
     setCurrentUser(DEMO_USER);
@@ -485,9 +502,6 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem("clipflow_active_view", currentView);
-      if (!isInitialMount.current) {
-        notifySaving();
-      }
     } catch (e) {}
   }, [currentView]);
 
@@ -1106,7 +1120,7 @@ export default function App() {
   );
 
   if (legalPage) {
-    return <LegalPage page={legalPage} onBack={() => setLegalPage(null)} />;
+    return <LegalPage page={legalPage} onBack={closeLegal} />;
   }
 
   if (!currentUser) {

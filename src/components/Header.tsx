@@ -255,11 +255,9 @@ export const Header: React.FC<HeaderProps> = ({
             title="Manage subscription and usage limits"
           >
             <Crown className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">{plan.name}</span>
-            {plan.id === "free" ? (
+            <span className="hidden sm:inline">{plan.id === "free" ? "Free" : `${plan.name} plan`}</span>
+            {plan.id === "free" && (
               <span className="text-[10px] px-1.5 py-0.2 bg-amber-400 text-black font-bold rounded">Upgrade</span>
-            ) : (
-              <span className="text-[10px] text-[#9CA5B5]">Plan</span>
             )}
           </button>
         )}
