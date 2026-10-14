@@ -579,7 +579,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         id: `ver_${targetShot.id}_1`,
         versionNumber: 1,
         prompt: targetShot.prompt,
-        videoUrl: targetShot.generatedVideoUrl || (targetShot as any).videoUrl || "/sample-media/tokyo_neon.mp4",
+        videoUrl: targetShot.generatedVideoUrl || (targetShot as any).videoUrl || "",
         thumbnailUrl: targetShot.generatedThumbnailUrl || (targetShot as any).thumbnailUrl || "",
         createdAt: new Date().toISOString(),
       }
@@ -590,7 +590,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
       versionNumber: nextVerNumber,
       prompt: `${targetShot.prompt}. Edited: ${instruction}`,
       editInstruction: instruction,
-      videoUrl: targetShot.generatedVideoUrl || (targetShot as any).videoUrl || "/sample-media/tokyo_neon.mp4",
+      videoUrl: targetShot.generatedVideoUrl || (targetShot as any).videoUrl || "",
       thumbnailUrl: targetShot.generatedThumbnailUrl || (targetShot as any).thumbnailUrl || "",
       createdAt: new Date().toISOString(),
     };

@@ -58,7 +58,7 @@ export const getAvailableClips = (projects: Project[]): AvailableClip[] => [
     duration: p.duration || 30,
     aspectRatio: p.aspectRatio,
     thumbnail: p.sourceThumbnail,
-    videoUrl: p.sourceVideoUrl || SAMPLE_VIDEOS[0].url,
+    videoUrl: p.sourceVideoUrl || "",
     hook: "Why 90% of Video Ads Flop in the First 3 Seconds",
   })),
   {
@@ -68,7 +68,7 @@ export const getAvailableClips = (projects: Project[]): AvailableClip[] => [
     duration: 34,
     aspectRatio: "9:16" as AspectRatio,
     thumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "/sample-media/tokyo_neon.mp4",
+    videoUrl: "",
     hook: "Stop recording remote podcasts over blurry Zoom calls.",
   },
   {
@@ -78,7 +78,7 @@ export const getAvailableClips = (projects: Project[]): AvailableClip[] => [
     duration: 28,
     aspectRatio: "9:16" as AspectRatio,
     thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "/sample-media/studio_camera.mp4",
+    videoUrl: "",
     hook: "This one audio setting makes your TikToks sound 10x louder.",
   },
   {
@@ -88,7 +88,7 @@ export const getAvailableClips = (projects: Project[]): AvailableClip[] => [
     duration: 45,
     aspectRatio: "16:9" as AspectRatio,
     thumbnail: "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "/sample-media/tokyo_neon.mp4",
+    videoUrl: "",
     hook: "Generate full cinematic commercial storyboards from a single sentence.",
   },
 ];

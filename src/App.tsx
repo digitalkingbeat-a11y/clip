@@ -73,13 +73,6 @@ import { OfflineNotice } from "./components/OfflineNotice";
 import { usePWAInstall } from "./hooks/usePWAInstall";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 
-const DEMO_USER: UserProfile = {
-  id: "usr_creator_01",
-  email: "alex.rivera@clipflow.video",
-  name: "Alex Rivera",
-  avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
-  planId: "creator",
-};
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>("home");
@@ -196,25 +189,11 @@ export default function App() {
 
   // Billing, Credits & Usage state (pre-populated with solid default fallback)
   const [plans, setPlans] = useState<Plan[]>(DEFAULT_PLANS);
-  const [currentPlan, setCurrentPlan] = useState<Plan | null>(DEFAULT_PLANS[3] || DEFAULT_PLANS[0]); // Default to Automated Pipeline tier
-  const [subscription, setSubscription] = useState<Subscription | null>({
-    id: "sub_default",
-    workspaceId: "workspace_default",
-    planId: "automated_pipeline",
-    status: "active",
-    currentPeriodStart: new Date().toISOString(),
-    currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    cancelAtPeriodEnd: false,
-    updatedAt: new Date().toISOString(),
-  });
+  // Real values come from /api/billing/usage for the signed-in user.
+  const [currentPlan, setCurrentPlan] = useState<Plan | null>(DEFAULT_PLANS.find((p) => p.id === "free") || null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [usageAllowance, setUsageAllowance] = useState<UsageAllowance | null>(DEFAULT_USAGE_ALLOWANCE);
-  const [creditBalance, setCreditBalance] = useState<CreditBalance | null>({
-    workspaceId: "workspace_default",
-    subscriptionCredits: 100,
-    purchasedCredits: 0,
-    totalAvailable: 100,
-    updatedAt: new Date().toISOString(),
-  });
+  const [creditBalance, setCreditBalance] = useState<CreditBalance | null>(null);
   const [creditPacks, setCreditPacks] = useState<CreditPack[]>(DEFAULT_CREDIT_PACKS);
   const [isStripeConfigured, setIsStripeConfigured] = useState<boolean>(false);
   const [billingBanner, setBillingBanner] = useState<{ message: string; type: "success" | "info" | "warning" } | null>(null);
@@ -236,61 +215,13 @@ export default function App() {
         }
       }
     } catch {}
-    return [
-      {
-        id: `proj_${Date.now()}`,
-        name: "Untitled Project",
-        aspectRatio: "16:9",
-        brandKitId: "brand_default",
-        duration: 60,
-        type: "editor",
-        status: "draft",
-        createdAt: new Date().toISOString().split("T")[0],
-        updatedAt: "Just now",
-      },
-    ];
+    return [];
   });
   const [activeProject, setActiveProject] = useState<Project | null>(() => projects[0] || null);
 
   // Social Accounts
-  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([
-    {
-      id: "soc_yt",
-      platform: "youtube",
-      name: "Alex Rivera Tech",
-      handle: "@alexrivera_tech",
-      connected: true,
-      autoPublishEnabled: true,
-      defaultPrivacy: "public",
-    },
-    {
-      id: "soc_tt",
-      platform: "tiktok",
-      name: "Alex Rivera",
-      handle: "@arivera_creator",
-      connected: true,
-      autoPublishEnabled: true,
-      defaultPrivacy: "public",
-    },
-    {
-      id: "soc_ig",
-      platform: "instagram",
-      name: "Alex Rivera Studios",
-      handle: "@alexrivera.film",
-      connected: true,
-      autoPublishEnabled: true,
-      defaultPrivacy: "public",
-    },
-    {
-      id: "soc_li",
-      platform: "linkedin",
-      name: "Alex Rivera",
-      handle: "in/alexrivera-founder",
-      connected: false,
-      autoPublishEnabled: false,
-      defaultPrivacy: "public",
-    },
-  ]);
+  // Only real connected accounts (from the server); no sample accounts.
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
 
   // Scheduled posts (Clean: no fake scheduled posts)
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledPost[]>(() => {
@@ -317,13 +248,13 @@ export default function App() {
   // User Account & Session State (Persists across browser sessions & installed PWA)
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     try {
+      localStorage.removeItem("clipflow_demo_mode"); // legacy demo flag
       const savedUser = localStorage.getItem("clipflow_user_profile");
-      if (savedUser) {
+      // Only a real session (token + profile) counts as signed in.
+      if (savedUser && localStorage.getItem("clipflow_auth_token")) {
         return JSON.parse(savedUser);
       }
     } catch (e) {}
-    // Signed-out visitors see the public landing page unless they chose "Try the demo"
-    if (localStorage.getItem("clipflow_demo_mode") === "1") return DEMO_USER;
     return null;
   });
   const [authModalMode, setAuthModalMode] = useState<"signin" | "signup">("signin");
@@ -346,10 +277,6 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  const enterDemo = () => {
-    localStorage.setItem("clipflow_demo_mode", "1");
-    setCurrentUser(DEMO_USER);
-  };
 
   // Admin flag comes only from the server (/api/auth/me checks ADMIN_EMAILS)
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
@@ -446,24 +373,12 @@ export default function App() {
       if (savedClips) {
         const parsed = JSON.parse(savedClips);
         if (Array.isArray(parsed)) {
-          const savedDemoTitle =
-            localStorage.getItem("clipflow_demo_clip_title") ||
-            "The 3-Month Wall That Destroys Creators";
-          const demoClip: ClipItem = {
-            ...INITIAL_CLIPS[0],
-            title: savedDemoTitle,
-            tags: ["DEMO CLIP - SAMPLE ONLY", "Mindset", "Creator Economy"],
-          };
-          const savedDemo = parsed.find((c: any) => c.id === "clip_01");
-          if (savedDemo?.title) {
-            demoClip.title = savedDemo.title;
-          }
           const nonDemoUserClips = parsed.filter(
             (c: any) =>
               !["clip_01", "clip_02", "clip_03", "clip_04"].includes(c.id) &&
-              !c.tags?.includes("DEMO CLIP")
+              !c.tags?.some?.((t: string) => t.includes("DEMO CLIP"))
           );
-          setClips([demoClip, ...nonDemoUserClips]);
+          setClips(nonDemoUserClips);
         }
       }
       const savedAspect = localStorage.getItem("clipflow_editor_aspect_ratio");
@@ -484,9 +399,9 @@ export default function App() {
     fetch("/api/projects")
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.projects?.length) {
+        if (data.success && Array.isArray(data.projects)) {
           setProjects(data.projects);
-          setActiveProject(data.projects[0]);
+          setActiveProject(data.projects[0] || null);
         }
       })
       .catch(() => {})
@@ -621,6 +536,12 @@ export default function App() {
         type: "success",
       });
       window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (urlParams.get("billing") === "credits_success") {
+      setBillingBanner({
+        message: "Payment successful! Your AI credits will appear in a moment.",
+        type: "success",
+      });
+      window.history.replaceState({}, document.title, window.location.pathname);
     } else if (urlParams.get("billing") === "cancel") {
       setBillingBanner({
         message: "Checkout canceled. Your current plan was not changed.",
@@ -652,14 +573,11 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        if (data.url && !data.isSandbox) {
-          window.location.href = data.url;
+        const url = data.checkoutUrl || data.url;
+        if (url) {
+          window.location.href = url;
         } else {
-          setBillingBanner({
-            message: `Upgraded to ${data.plan?.name || planId} plan! Entitlements and processing limits have been refreshed.`,
-            type: "success",
-          });
-          fetchBillingData();
+          alert("Checkout couldn't be started. Please try again.");
         }
       } else {
         alert(data.error || "Failed to initiate plan upgrade");
@@ -678,11 +596,8 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        setBillingBanner({
-          message: `Added ${data.purchasedCredits || ""} AI credits! Total available: ${data.totalAvailable} credits.`,
-          type: "success",
-        });
-        fetchBillingData();
+        // Credits are added after Stripe confirms payment (webhook).
+        if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       } else {
         alert(data.error || "Failed to purchase credit pack");
       }
@@ -965,7 +880,7 @@ export default function App() {
           platforms: post.platforms,
           title: post.title,
           caption: post.caption,
-          videoUrl: "/sample-media/tokyo_neon.mp4",
+          videoUrl: "",
         }),
       });
       const data = await res.json();
@@ -973,6 +888,8 @@ export default function App() {
         setScheduledPosts((prev) =>
           prev.map((p) => (p.id === post.id ? { ...p, status: "published", publishedPostId: data.publishedIds?.[0] || "sync_ok" } : p))
         );
+      } else {
+        alert(data.error || "Publishing failed.");
       }
     } catch (e) {
       console.error(e);
@@ -984,7 +901,10 @@ export default function App() {
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.projects) && data.projects.length > 0) {
+        if (data.success && Array.isArray(data.projects) && data.projects.length === 0) {
+          setProjects([]);
+          setActiveProject(null);
+        } else if (data.success && Array.isArray(data.projects) && data.projects.length > 0) {
           setProjects(data.projects);
           const readyProj = data.projects.find((p: any) => p.status === "ready" || p.clips?.length > 0) || data.projects[0];
           setActiveProject(readyProj);
@@ -1113,8 +1033,9 @@ export default function App() {
       currentUser={currentUser}
       initialMode={authModalMode}
       onUserUpdate={(u) => {
-        if (u) localStorage.removeItem("clipflow_demo_mode");
         setCurrentUser(u);
+        // Reload so every view starts from the new account's own data.
+        setTimeout(() => window.location.reload(), 900);
       }}
     />
   );
@@ -1131,7 +1052,6 @@ export default function App() {
           creditPacks={creditPacks}
           onSignUp={() => { setAuthModalMode("signup"); setIsAuthModalOpen(true); }}
           onLogIn={() => { setAuthModalMode("signin"); setIsAuthModalOpen(true); }}
-          onTryDemo={enterDemo}
           onOpenLegal={openLegal}
         />
         {authModalEl}
@@ -1660,7 +1580,7 @@ export default function App() {
           {currentView === "astra_post" && (
             <AstraPostProductionView
               activeProject={activeProject}
-              videoSrc={activeProject?.sourceVideoUrl || SAMPLE_VIDEOS[0]?.url}
+              videoSrc={activeProject?.sourceVideoUrl || ""}
               aspectRatio={aspectRatio}
               onApplySettings={(st) => {
                 setActiveProject((prev) => (prev ? { ...prev, updatedAt: "Just now" } : prev));
@@ -1842,7 +1762,7 @@ export default function App() {
                   sourceVideoUrl: recording.url,
                   sourceThumbnail:
                     recording.thumbnail ||
-                    "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
+                    "",
                   lastEdited: "Just now",
                   status: "ready",
                   clipsGenerated: 0,
@@ -1880,7 +1800,7 @@ export default function App() {
                   sourceVideoUrl: recording.url,
                   sourceThumbnail:
                     recording.thumbnail ||
-                    "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
+                    "",
                   lastEdited: "Just now",
                   status: "ready",
                   clipsGenerated: 3,
@@ -1934,13 +1854,23 @@ export default function App() {
                   prev.map((acc) => (acc.id === id ? { ...acc, autoPublishEnabled: !acc.autoPublishEnabled } : acc))
                 )
               }
-              onConnectAccount={(platform) => {
-                if (platform === "linkedin" || platform === "meta") {
-                  return;
+              onConnectAccount={async (platform) => {
+                // Real OAuth isn't configured yet; show the server's honest answer instead of faking a connection.
+                try {
+                  const r = await fetch("/api/social-accounts/connect", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ platform }),
+                  });
+                  const d = await r.json();
+                  if (d.success && d.account) {
+                    setSocialAccounts((prev) => [...prev.filter((a) => a.platform !== platform), d.account]);
+                  } else {
+                    alert(d.error || "Couldn't connect this account.");
+                  }
+                } catch (e: any) {
+                  alert("Couldn't connect this account: " + e.message);
                 }
-                setSocialAccounts((prev) =>
-                  prev.map((acc) => (acc.platform === platform ? { ...acc, connected: !acc.connected } : acc))
-                );
               }}
             />
           )}
@@ -2018,7 +1948,7 @@ export default function App() {
             </div>
           )}
 
-          {currentView === "affiliate" && (
+          {isAdmin && currentView === "affiliate" && (
             <div className="flex-1 overflow-y-auto bg-[#080A0F] pb-[calc(env(safe-area-inset-bottom,0px)+80px)] md:pb-8">
               <AffiliateDashboard onNavigateToPricing={() => setCurrentView("pricing")} />
             </div>
@@ -2035,7 +1965,7 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] p-0.5">
                         <img
-                          src={currentUser?.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"}
+                          src={currentUser?.avatarUrl || ""}
                           alt={currentUser?.name || "User"}
                           className="w-full h-full object-cover rounded-full bg-[#0E121C]"
                         />

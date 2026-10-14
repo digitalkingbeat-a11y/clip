@@ -63,7 +63,7 @@ export const AdTestBuilder: React.FC<AdTestBuilderProps> = ({ onBackToHub }) => 
           bodyText: b,
           ctaId: `c_${cIdx}`,
           ctaText: c,
-          videoUrl: "/sample-media/tokyo_neon.mp4",
+          videoUrl: "",
           thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
           status: "ready",
           estimatedCtr: `${(3.2 + (hIdx * 0.4) + (cIdx * 0.3)).toFixed(1)}%`,

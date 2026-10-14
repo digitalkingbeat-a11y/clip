@@ -176,7 +176,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
       duration: 30,
       type: "editor",
       status: "ready",
-      sourceVideoUrl: "/sample-media/tokyo_neon.mp4",
+      sourceVideoUrl: "",
       sourceThumbnail: v.thumbnail,
       createdAt: new Date().toISOString(),
       updatedAt: "Just now",
@@ -198,7 +198,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
         startTime: 0,
         duration: 30,
         sourceStartTime: 0,
-        sourceUrl: "/sample-media/tokyo_neon.mp4",
+        sourceUrl: "",
       },
       {
         id: `it_cap_${Date.now()}`,

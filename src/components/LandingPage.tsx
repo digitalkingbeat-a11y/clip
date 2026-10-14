@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   Scissors, Captions, Sparkles, Film, CalendarClock, BarChart3, Palette, Upload, Wand2, Send,
-  Check, ChevronDown, ArrowRight, PlayCircle, Menu, X,
+  Check, ChevronDown, ArrowRight, Menu, X,
 } from "lucide-react";
 import { Plan, CreditPack } from "../types";
 import { ClipFlowLogo } from "./ClipFlowLogo";
@@ -12,7 +12,6 @@ interface LandingPageProps {
   creditPacks: CreditPack[];
   onSignUp: () => void;
   onLogIn: () => void;
-  onTryDemo: () => void;
   onOpenLegal: (page: LegalPageId) => void;
 }
 
@@ -40,7 +39,7 @@ const FAQ = [
   { q: "Do I own my content?", a: "Yes. You keep ownership of everything you upload and create. See our Terms of Service for details." },
 ];
 
-export const LandingPage: React.FC<LandingPageProps> = ({ plans, creditPacks, onSignUp, onLogIn, onTryDemo, onOpenLegal }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ plans, creditPacks, onSignUp, onLogIn, onOpenLegal }) => {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const paidPlans = plans.filter((p) => p.priceMonthly > 0 || p.id === "free");
@@ -93,17 +92,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ plans, creditPacks, on
             Turn long videos into <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#933CFF] to-[#16D9F5]">scroll-stopping shorts</span>
           </h1>
           <p className="mt-5 text-base sm:text-lg text-[#9CA5B5] max-w-2xl mx-auto">
-            ClipFlow Video finds the best moments in your podcasts and webinars, makes vertical captioned clips, writes AI scripts, and posts to YouTube, TikTok and Instagram for you.
+            ClipFlow Video finds the best moments in your podcasts and webinars, makes vertical captioned clips, writes AI scripts, and helps you plan posts for YouTube, TikTok and Instagram.
           </p>
           <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
             <button onClick={onSignUp} className="px-6 py-3 rounded-xl bg-clipflow-gradient-h text-white font-bold flex items-center justify-center gap-2 cursor-pointer">
               Get started <ArrowRight className="w-4 h-4" />
             </button>
-            <button onClick={onTryDemo} className="px-6 py-3 rounded-xl border border-[#272D3A] bg-[#11151E] hover:bg-[#161B26] font-semibold flex items-center justify-center gap-2 cursor-pointer">
-              <PlayCircle className="w-4 h-4" /> Try the demo
-            </button>
           </div>
-          <p className="mt-3 text-xs text-[#5C6577]">The demo uses sample data; nothing is saved to an account.</p>
+          <p className="mt-3 text-xs text-[#5C6577]">Free plan available. No credit card needed to sign up.</p>
         </div>
       </section>
 

@@ -156,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA5B5]">
           Workflows & Tools
         </div>
-        {navItems.map((item) => {
+        {navItems.filter((item) => isAdmin || item.id !== "affiliate").map((item) => {
           const Icon = item.icon;
           const isActive = currentView === item.id;
           return (

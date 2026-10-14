@@ -349,16 +349,7 @@ export class MCPConnectorService {
 
         result = {
           project: project ? { id: project.id, name: project.name, status: project.status } : null,
-          activeClipCandidates: [
-            {
-              id: "clip_01",
-              title: "The 3-Month Wall That Destroys Creators",
-              isDemo: true,
-              hook: "If you've been posting for 60 days and feel like quitting, listen to this.",
-              duration: 46,
-              status: "approved",
-            }
-          ],
+          activeClipCandidates: (project?.clips || []).map((c: any) => ({ id: c.id, title: c.title, hook: c.hook, duration: c.duration, status: c.status })),
           scheduledPostsCount: projectPosts.length,
           calendarSummary: projectPosts.map((p: any) => ({
             id: p.id,
@@ -557,7 +548,7 @@ export class MCPConnectorService {
         type: payload.type === "video_link" ? "clipper" : "editor",
         status: "draft",
         sourceVideoUrl: payload.url || "",
-        sourceThumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80",
+        sourceThumbnail: "",
         createdAt: new Date().toISOString(),
         updatedAt: "Just now",
         ingestedLinks: [],

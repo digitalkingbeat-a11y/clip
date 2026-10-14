@@ -431,12 +431,12 @@ export class AutomationPipelineService {
         id: "pipeline_clipflow_weekly",
         name: "Weekly Long Video → 7 Clips Multi-Channel Pipeline",
         template: "long_to_7_clips_weekly",
-        active: true,
+        active: false,
         isPaused: false,
-        lastTestPassed: true,
-        lastTestAt: new Date(Date.now() - 3600000).toISOString(),
-        lastRunAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        nextScheduledRun: new Date(Date.now() + 86400000 * 2).toISOString(),
+        lastTestPassed: false,
+        lastTestAt: null,
+        lastRunAt: null,
+        nextScheduledRun: null,
         settings: {
           workflowTemplate: "long_to_7_clips_weekly",
           videoSource: "google_drive",
@@ -475,12 +475,22 @@ export class AutomationPipelineService {
         },
         steps: DEFAULT_STEPS,
         connections: DEFAULT_CONNECTIONS,
-        runs: DEFAULT_RUNS,
-        alerts: DEFAULT_ALERTS,
+        runs: [],
+        alerts: [],
       };
       writeDb(db);
     }
-    return db.automatedPipeline;
+    // Strip sample runs/alerts and fake "connected" accounts seeded by older versions.
+    const p = db.automatedPipeline;
+    const SEEDED = new Set(["run_9821_success", "run_9820_attention", "alert_01", "alert_02"]);
+    const before = JSON.stringify([p.runs, p.alerts, p.connections]);
+    p.runs = (p.runs || []).filter((r: any) => !SEEDED.has(r.id));
+    p.alerts = (p.alerts || []).filter((a: any) => !SEEDED.has(a.id));
+    p.connections = (p.connections || []).map((c: any) =>
+      c.realCredentials ? c : { ...c, status: "not_connected", accountIdentifier: undefined, lastTestedAt: undefined, testLatencyMs: undefined, testMessage: undefined }
+    );
+    if (JSON.stringify([p.runs, p.alerts, p.connections]) !== before) writeDb(db);
+    return p;
   }
 
   /**
@@ -526,6 +536,17 @@ export class AutomationPipelineService {
     const conn = pipeline.connections.find((c) => c.id === connectionId);
     if (!conn) {
       throw new Error(`Connection ${connectionId} not supported`);
+    }
+
+    // Connection checks are not wired to the real services yet, so never report a fake success.
+    if (!process.env.CLIPFLOW_ENABLE_CONNECTION_TESTS) {
+    conn.status = "not_connected";
+    return {
+      success: false,
+      connection: conn,
+      message: `Connecting ${conn.name} isn't available yet: it needs real API/OAuth credentials, which aren't set up.`,
+      latencyMs: 0,
+    };
     }
 
     conn.status = "testing";

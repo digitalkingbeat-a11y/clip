@@ -309,7 +309,7 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onUpdateProp("name", "[LIVE CUT] Cam 1: Alex Rivera (Host)");
+                  onUpdateProp("name", "[LIVE CUT] Cam 1: Host");
                   onUpdateProp("sourceUrl", "/storage/uploads/sample_test.mp4");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
@@ -319,14 +319,14 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
                 }`}
               >
                 <span className="w-2 h-2 rounded-full bg-[#16D9F5]" />
-                <span className="truncate">Cam 1: Host (Alex)</span>
+                <span className="truncate">Cam 1: Host</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
                   onUpdateProp("name", "[LIVE CUT] Cam 2: John Knox (Guest)");
-                  onUpdateProp("sourceUrl", "/sample-media/studio_camera.mp4");
+                  onUpdateProp("sourceUrl", "");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
                   item.name.includes("Cam 2") || item.sourceUrl?.includes("ForBiggerEscapes.mp4")
@@ -342,7 +342,7 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
                 type="button"
                 onClick={() => {
                   onUpdateProp("name", "[LIVE CUT] Cam 3: Sarah Lin (Producer)");
-                  onUpdateProp("sourceUrl", "/sample-media/creator_trap.mp4");
+                  onUpdateProp("sourceUrl", "");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
                   item.name.includes("Cam 3") || item.sourceUrl?.includes("TearsOfSteel.mp4")
@@ -358,7 +358,7 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
                 type="button"
                 onClick={() => {
                   onUpdateProp("name", "[LIVE CUT] Dual Split (Host & Guest)");
-                  onUpdateProp("sourceUrl", "/sample-media/tokyo_neon.mp4");
+                  onUpdateProp("sourceUrl", "");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
                   item.name.includes("Dual") || item.name.includes("Split")

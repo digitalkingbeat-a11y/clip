@@ -49,7 +49,7 @@ export const MultiPlatformLaunch: React.FC<MultiPlatformLaunchProps> = ({
     aspectRatio: "9:16" as AspectRatio,
     duration: 30,
     sourceThumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-    sourceVideoUrl: "/sample-media/tokyo_neon.mp4",
+    sourceVideoUrl: "",
   });
 
   const [platformTargets, setPlatformTargets] = useState({

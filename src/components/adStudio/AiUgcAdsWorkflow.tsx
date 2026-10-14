@@ -115,7 +115,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       duration: 30,
       type: "editor",
       status: "ready",
-      sourceVideoUrl: "/sample-media/tokyo_neon.mp4",
+      sourceVideoUrl: "",
       sourceThumbnail: currentTpl.bgImage,
       createdAt: new Date().toISOString(),
       updatedAt: "Just now",
@@ -139,7 +139,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
         startTime: 0,
         duration: 30,
         sourceStartTime: 0,
-        sourceUrl: "/sample-media/tokyo_neon.mp4",
+        sourceUrl: "",
       },
       {
         id: `it_cap_${Date.now()}`,

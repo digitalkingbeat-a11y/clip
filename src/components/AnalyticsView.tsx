@@ -371,108 +371,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <span className="text-[11px] text-gray-500 font-mono">Organic Feed Analytics</span>
           </div>
 
-          {/* Top Metric Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-            {[
-              { label: "Total Cross-Platform Views", value: "412.8K", change: "+28.4%", icon: Eye, color: "text-indigo-400" },
-              { label: "Avg. Hook Retention (3s)", value: "79.2%", change: "+14.1%", icon: Zap, color: "text-amber-400" },
-              { label: "Average Watch Time", value: "32.6s", change: "+6.8%", icon: Clock, color: "text-cyan-400" },
-              { label: "Total Shares & Saves", value: "18.4K", change: "+42.0%", icon: Share2, color: "text-emerald-400" },
-            ].map((card, i) => (
-              <div key={i} className="bg-[#10121a] border border-[#1e2333] p-4 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-medium text-gray-400">{card.label}</span>
-                  <card.icon className={`w-4 h-4 ${card.color}`} />
-                </div>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xl font-bold text-white font-mono">{card.value}</span>
-                  <span className="text-[11px] font-semibold text-emerald-400">{card.change}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Retention Curve & Platform Breakdown */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Retention Curve (2 cols) */}
-            <div className="lg:col-span-2 bg-[#10121a] border border-[#1e2333] rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                    Audience Retention Curve (Avg. 45s Shorts)
-                  </h3>
-                  <p className="text-[11px] text-gray-400">Comparing ClipFlow Video Kinetic Captions vs Un-captioned</p>
-                </div>
-                <span className="text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                  +44% Completion
-                </span>
-              </div>
-
-              {/* Retention Graph Visualization */}
-              <div className="h-44 w-full bg-[#0d0f17] border border-[#1a1f2e] rounded-lg p-3 flex flex-col justify-between relative">
-                <div className="flex justify-between text-[10px] font-mono text-gray-500 border-b border-gray-800 pb-1">
-                  <span>100%</span>
-                  <span>0s (Hook)</span>
-                  <span>15s (Core)</span>
-                  <span>30s (Payoff)</span>
-                  <span>45s (CTA)</span>
-                </div>
-
-                <div className="flex-1 relative my-2 flex items-end">
-                  <svg className="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 100 100">
-                    <path
-                      d="M 0 5 Q 15 15, 30 22 T 60 28 T 100 38"
-                      fill="none"
-                      stroke="#6366f1"
-                      strokeWidth="3"
-                    />
-                    <path
-                      d="M 0 5 Q 10 40, 30 65 T 60 78 T 100 85"
-                      fill="none"
-                      stroke="#4b5563"
-                      strokeWidth="2"
-                      strokeDasharray="4"
-                    />
-                  </svg>
-                </div>
-
-                <div className="flex items-center justify-between text-[10px] text-gray-400 pt-1 border-t border-gray-800">
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-0.5 bg-indigo-500 inline-block"></span>
-                    <span className="text-gray-300">ClipFlow Video (Kinetic Captions + Jump Cuts)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-0.5 bg-gray-500 inline-block border-dashed"></span>
-                    <span>Standard Raw Cut</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Platform Distribution */}
-            <div className="bg-[#10121a] border border-[#1e2333] rounded-xl p-5">
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-4">
-                Views by Social Destination
-              </h3>
-              <div className="space-y-3">
-                {[
-                  { name: "YouTube Shorts", views: "184.2K", pct: 45, color: "bg-red-500" },
-                  { name: "TikTok", views: "128.5K", pct: 31, color: "bg-cyan-500" },
-                  { name: "Instagram Reels", views: "74.1K", pct: 18, color: "bg-pink-500" },
-                  { name: "LinkedIn & X", views: "26.0K", pct: 6, color: "bg-blue-500" },
-                ].map((item, idx) => (
-                  <div key={idx} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-300">{item.name}</span>
-                      <span className="font-mono text-white font-semibold">{item.views}</span>
-                    </div>
-                    <div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
-                      <div className={`${item.color} h-full rounded-full`} style={{ width: `${item.pct}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* No sample numbers: real social metrics need connected accounts. */}
+          <div className="rounded-2xl border border-dashed border-[#272D3A] bg-[#0E121A] p-8 text-center">
+            <p className="text-sm font-semibold text-white">No video metrics yet</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Views, retention and shares will appear here once your YouTube, TikTok or Instagram accounts are connected and you've published clips.
+            </p>
           </div>
         </div>
 

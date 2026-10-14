@@ -180,14 +180,31 @@ export class FFmpegService {
     this.ffprobePath = resolvedFfprobe || "ffprobe";
   }
 
+  // Re-resolve if the cached binary disappeared (e.g. container changed), and fail with a
+  // clear message instead of a raw "spawn ... ENOENT" when FFmpeg is genuinely missing.
+  private ensureBinary(kind: "ffmpeg" | "ffprobe"): string {
+    const current = kind === "ffmpeg" ? this.ffmpegPath : this.ffprobePath;
+    const missing = !current || (path.isAbsolute(current) && !fs.existsSync(current));
+    if (missing) this.resolveBinaries();
+    const resolved = kind === "ffmpeg" ? this.ffmpegPath : this.ffprobePath;
+    if (path.isAbsolute(resolved) && fs.existsSync(resolved)) return resolved;
+    try {
+      execFileSync(resolved, ["-version"], { stdio: "ignore", timeout: 5000 });
+      return resolved;
+    } catch {
+      throw new Error(
+        `${kind === "ffmpeg" ? "FFmpeg" : "FFprobe"} isn't available on the server, so video processing and export can't run. ` +
+          `Install it or reinstall the ${kind}-static package (or set ${kind.toUpperCase()}_PATH).`
+      );
+    }
+  }
+
   public getFFmpegPath(): string {
-    if (!this.ffmpegPath) this.resolveBinaries();
-    return this.ffmpegPath;
+    return this.ensureBinary("ffmpeg");
   }
 
   public getFFprobePath(): string {
-    if (!this.ffprobePath) this.resolveBinaries();
-    return this.ffprobePath;
+    return this.ensureBinary("ffprobe");
   }
 
   /**
@@ -763,16 +780,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
       return outRenderPath;
     } catch (seqErr: any) {
-      console.warn("[FFmpegService] Sequence render failed, using safe fallback container:", seqErr.message);
-      if (!fs.existsSync(outRenderPath)) {
-        const sampleFallback = path.join(process.cwd(), "storage", "uploads", "sample_test.mp4");
-        if (fs.existsSync(sampleFallback)) {
-          fs.copyFileSync(sampleFallback, outRenderPath);
-        } else {
-          throw seqErr;
-        }
-      }
-      return outRenderPath;
+      console.warn("[FFmpegService] Sequence render failed:", seqErr.message);
+      throw seqErr;
     } finally {
       // Clean up temp dir
       try {

@@ -34,232 +34,26 @@ export class AffiliateService {
       modified = true;
     }
 
+    // No seeded referrals, commissions or payouts: only real affiliate activity is stored.
     if (!db.affiliate_referrals) {
-      // Seed with realistic referrals demonstrating the exact rules:
-      // $5 signup bonus, 10% monthly commission ($10 -> $1, $50 -> $5, $100 -> $10)
-      db.affiliate_referrals = [
-        {
-          id: "ref_001",
-          affiliateId: this.defaultAffiliateId,
-          referredUserId: "usr_alex_pod",
-          referredUserEmail: "alex.podcast@audioflow.io",
-          referredUserName: "Alex Rivera (Daily Audio)",
-          signupDate: "2026-07-15T14:22:00.000Z",
-          verificationStatus: "verified",
-          reviewPeriodDays: 14,
-          reviewEligibleDate: "2026-07-29T14:22:00.000Z",
-          signupBonusAmount: 5.0,
-          signupBonusStatus: "approved",
-          currentPlan: "automated_pipeline",
-          planAmountMonthly: 100.0,
-          status: "active",
-          totalPaidByCustomer: 200.0,
-          totalCommissionsEarned: 25.0, // $5 signup + $10 + $10 recurring
-          lastPaymentDate: "2026-09-15T14:22:00.000Z",
-        },
-        {
-          id: "ref_002",
-          affiliateId: this.defaultAffiliateId,
-          referredUserId: "usr_sara_vlog",
-          referredUserEmail: "sara.content@vloghub.co",
-          referredUserName: "Sara Chen (Tech Weekly)",
-          signupDate: "2026-08-02T09:15:00.000Z",
-          verificationStatus: "verified",
-          reviewPeriodDays: 14,
-          reviewEligibleDate: "2026-08-16T09:15:00.000Z",
-          signupBonusAmount: 5.0,
-          signupBonusStatus: "approved",
-          currentPlan: "agent",
-          planAmountMonthly: 50.0,
-          status: "active",
-          totalPaidByCustomer: 100.0,
-          totalCommissionsEarned: 15.0, // $5 signup + $5 + $5 recurring
-          lastPaymentDate: "2026-09-02T09:15:00.000Z",
-        },
-        {
-          id: "ref_003",
-          affiliateId: this.defaultAffiliateId,
-          referredUserId: "usr_marcus_clips",
-          referredUserEmail: "marcus@reelsgrowth.com",
-          referredUserName: "Marcus Cole (Shorts Lab)",
-          signupDate: "2026-08-20T16:40:00.000Z",
-          verificationStatus: "verified",
-          reviewPeriodDays: 14,
-          reviewEligibleDate: "2026-09-03T16:40:00.000Z",
-          signupBonusAmount: 5.0,
-          signupBonusStatus: "approved",
-          currentPlan: "basic",
-          planAmountMonthly: 10.0,
-          status: "active",
-          totalPaidByCustomer: 20.0,
-          totalCommissionsEarned: 7.0, // $5 signup + $1 + $1 recurring
-          lastPaymentDate: "2026-09-20T16:40:00.000Z",
-        },
-        {
-          id: "ref_004",
-          affiliateId: this.defaultAffiliateId,
-          referredUserId: "usr_elena_free",
-          referredUserEmail: "elena.starter@gmail.com",
-          referredUserName: "Elena Rostova",
-          signupDate: "2026-09-22T11:05:00.000Z",
-          verificationStatus: "pending_review",
-          reviewPeriodDays: 14,
-          reviewEligibleDate: "2026-10-06T11:05:00.000Z",
-          signupBonusAmount: 5.0,
-          signupBonusStatus: "pending_review",
-          currentPlan: "free",
-          planAmountMonthly: 0.0,
-          status: "active",
-          totalPaidByCustomer: 0.0,
-          totalCommissionsEarned: 0.0,
-        },
-      ];
+      db.affiliate_referrals = [];
       modified = true;
     }
-
     if (!db.affiliate_commissions) {
-      db.affiliate_commissions = [
-        // Ref 001 events: $5 signup bonus, $100 payment -> $10 commission, second $100 payment -> $10 commission
-        {
-          id: "comm_001",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_001",
-          type: "signup_bonus",
-          amount: 5.0,
-          grossPaymentAmount: 0.0,
-          percentageRate: 0,
-          description: "One-time $5 signup bonus (Verified account: Alex Rivera)",
-          paymentEventId: "evt_bonus_ref_001",
-          createdAt: "2026-07-29T14:30:00.000Z",
-          status: "paid",
-        },
-        {
-          id: "comm_002",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_001",
-          type: "recurring_payment",
-          amount: 10.0,
-          grossPaymentAmount: 100.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $100 Automated Pipeline subscription",
-          paymentEventId: "in_stripe_alex_01",
-          createdAt: "2026-08-15T14:22:00.000Z",
-          status: "paid",
-        },
-        {
-          id: "comm_003",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_001",
-          type: "recurring_payment",
-          amount: 10.0,
-          grossPaymentAmount: 100.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $100 Automated Pipeline subscription",
-          paymentEventId: "in_stripe_alex_02",
-          createdAt: "2026-09-15T14:22:00.000Z",
-          status: "available",
-        },
-        // Ref 002 events: $5 signup, $50 payment -> $5 commission, second $50 payment -> $5 commission
-        {
-          id: "comm_004",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_002",
-          type: "signup_bonus",
-          amount: 5.0,
-          grossPaymentAmount: 0.0,
-          percentageRate: 0,
-          description: "One-time $5 signup bonus (Verified account: Sara Chen)",
-          paymentEventId: "evt_bonus_ref_002",
-          createdAt: "2026-08-16T09:30:00.000Z",
-          status: "paid",
-        },
-        {
-          id: "comm_005",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_002",
-          type: "recurring_payment",
-          amount: 5.0,
-          grossPaymentAmount: 50.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $50 Agent tier subscription",
-          paymentEventId: "in_stripe_sara_01",
-          createdAt: "2026-08-02T09:15:00.000Z",
-          status: "paid",
-        },
-        {
-          id: "comm_006",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_002",
-          type: "recurring_payment",
-          amount: 5.0,
-          grossPaymentAmount: 50.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $50 Agent tier subscription",
-          paymentEventId: "in_stripe_sara_02",
-          createdAt: "2026-09-02T09:15:00.000Z",
-          status: "available",
-        },
-        // Ref 003 events: $5 signup, $10 payment -> $1 commission, second $10 payment -> $1 commission
-        {
-          id: "comm_007",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_003",
-          type: "signup_bonus",
-          amount: 5.0,
-          grossPaymentAmount: 0.0,
-          percentageRate: 0,
-          description: "One-time $5 signup bonus (Verified account: Marcus Cole)",
-          paymentEventId: "evt_bonus_ref_003",
-          createdAt: "2026-09-03T16:50:00.000Z",
-          status: "available",
-        },
-        {
-          id: "comm_008",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_003",
-          type: "recurring_payment",
-          amount: 1.0,
-          grossPaymentAmount: 10.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $10 Basic tier subscription",
-          paymentEventId: "in_stripe_marcus_01",
-          createdAt: "2026-08-20T16:40:00.000Z",
-          status: "paid",
-        },
-        {
-          id: "comm_009",
-          affiliateId: this.defaultAffiliateId,
-          referralId: "ref_003",
-          type: "recurring_payment",
-          amount: 1.0,
-          grossPaymentAmount: 10.0,
-          percentageRate: 10,
-          description: "10% recurring commission on $10 Basic tier subscription",
-          paymentEventId: "in_stripe_marcus_02",
-          createdAt: "2026-09-20T16:40:00.000Z",
-          status: "available",
-        },
-      ];
+      db.affiliate_commissions = [];
       modified = true;
     }
-
     if (!db.affiliate_payouts) {
-      db.affiliate_payouts = [
-        {
-          id: "pay_2026_08",
-          affiliateId: this.defaultAffiliateId,
-          period: "August 2026",
-          payoutDate: "2026-09-01T00:00:00.000Z",
-          signupBonusesTotal: 10.0, // 2 verified bonuses ($5 x 2)
-          recurringCommissionsTotal: 16.0, // $10 (Alex) + $5 (Sara) + $1 (Marcus)
-          adjustmentsTotal: 0.0,
-          netPayoutUsd: 26.0,
-          status: "completed",
-          paymentMethod: "PayPal (digitalkingbeat@gmail.com)",
-          referenceNumber: "TXN-CF-260901-7729",
-        },
-      ];
+      db.affiliate_payouts = [];
       modified = true;
+    }
+    // Remove sample records seeded by older versions.
+    const SEED_IDS = new Set(["ref_001", "ref_002", "ref_003", "ref_004", "pay_2026_08",
+      "comm_001", "comm_002", "comm_003", "comm_004", "comm_005", "comm_006", "comm_007", "comm_008", "comm_009"]);
+    for (const key of ["affiliate_referrals", "affiliate_commissions", "affiliate_payouts"]) {
+      const before = db[key].length;
+      db[key] = db[key].filter((r: any) => !SEED_IDS.has(r.id));
+      if (db[key].length !== before) modified = true;
     }
 
     if (modified) {

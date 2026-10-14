@@ -24,7 +24,7 @@ export const QuickAdWorkflow: React.FC<QuickAdWorkflowProps> = ({
   projects,
   onBackToHub,
 }) => {
-  const [selectedVideo, setSelectedVideo] = useState(projects[0]?.sourceVideoUrl || "/sample-media/tokyo_neon.mp4");
+  const [selectedVideo, setSelectedVideo] = useState(projects[0]?.sourceVideoUrl || "");
   const [selectedPlatform, setSelectedPlatform] = useState<AdTargetPlatform>("tiktok");
   const [websiteUrl, setWebsiteUrl] = useState("https://mybrand.com/offer");
   const [isAdvanced, setIsAdvanced] = useState(false);

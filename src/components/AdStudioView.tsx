@@ -120,7 +120,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
 }) => {
   // Pipelines data store
   const [campaigns, setCampaigns] = useState<AdCampaignPipelineData[]>(INITIAL_CAMPAIGN_PIPELINES);
-  const [activeCampaignId, setActiveCampaignId] = useState<string>(INITIAL_CAMPAIGN_PIPELINES[0].id);
+  const [activeCampaignId, setActiveCampaignId] = useState<string>(INITIAL_CAMPAIGN_PIPELINES[0]?.id || "");
 
   // Active campaign helper
   const activeCampaign = useMemo(() => {
@@ -633,7 +633,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
             name: `${campaignName || "Commercial"}_TikTok_9x16.mp4`,
             format: "9:16",
             duration: 30,
-            videoUrl: "/sample-media/tokyo_neon.mp4",
+            videoUrl: "",
             thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
             hook: "Why 90% of DTC Ads Fail in the First 3 Seconds",
             cta: "Claim Free Trial",
@@ -645,7 +645,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
             name: `${campaignName || "Commercial"}_MetaFeed_1x1.mp4`,
             format: "1:1",
             duration: 30,
-            videoUrl: "/sample-media/tokyo_neon.mp4",
+            videoUrl: "",
             thumbnailUrl: "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=600&q=80",
             hook: "How We Generate 20 Video Ads in 15 Minutes without an Agency",
             cta: "Start Free Trial",
@@ -685,7 +685,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
       duration: creative.duration || 30,
       type: "clipper",
       status: "completed",
-      sourceVideoUrl: creative.videoUrl || "/sample-media/tokyo_neon.mp4",
+      sourceVideoUrl: creative.videoUrl || "",
       sourceThumbnail: creative.thumbnailUrl || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
       createdAt: new Date().toISOString(),
       updatedAt: "Just now",

@@ -25,7 +25,7 @@ interface AdWorkflowBuilderProps {
 
 export const AdWorkflowBuilder: React.FC<AdWorkflowBuilderProps> = ({ onBackToHub }) => {
   const [pipelines, setPipelines] = useState<AdNodePipeline[]>(INITIAL_AD_WORKFLOW_PIPELINES);
-  const [activePipelineId, setActivePipelineId] = useState<string>(INITIAL_AD_WORKFLOW_PIPELINES[0].id);
+  const [activePipelineId, setActivePipelineId] = useState<string>(INITIAL_AD_WORKFLOW_PIPELINES[0]?.id || "");
 
   const activePipeline = pipelines.find((p) => p.id === activePipelineId) || pipelines[0];
   const [isRunningPipeline, setIsRunningPipeline] = useState(false);

@@ -55,6 +55,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         localStorage.setItem("clipflow_auth_token", data.token);
       }
       if (data.user) {
+        clearCachedWorkspaceData();
         localStorage.setItem("clipflow_user_profile", JSON.stringify(data.user));
         onUserUpdate(data.user);
       }
@@ -85,6 +86,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
       localStorage.removeItem("clipflow_auth_token");
       localStorage.removeItem("clipflow_user_profile");
+      clearCachedWorkspaceData();
       onUserUpdate(null);
       setSuccessMsg("Logged out successfully.");
       setTimeout(() => {
@@ -97,17 +99,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleQuickDemoFill = (type: "demo_creator" | "new_user") => {
-    if (type === "demo_creator") {
-      setEmail("alex.rivera@clipflow.video");
-      setPassword("ClipFlow2025!");
-      setName("Alex Rivera");
-    } else {
-      setEmail(`creator_${Math.floor(Math.random() * 9000 + 1000)}@studio.flow`);
-      setPassword("Pass123456!");
-      setName("New Mobile Creator");
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
@@ -283,27 +274,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </div>
 
-              {/* Quick Preset Buttons for easy testing */}
-              <div className="flex items-center justify-between text-[11px] pt-1 text-gray-400">
-                <span>Quick Fill:</span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickDemoFill("demo_creator")}
-                    className="px-2 py-0.5 rounded bg-[#171E2D] hover:bg-[#222B3D] text-[#16D9F5] border border-[#272D3A]"
-                  >
-                    Demo Creator
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickDemoFill("new_user")}
-                    className="px-2 py-0.5 rounded bg-[#171E2D] hover:bg-[#222B3D] text-gray-300 border border-[#272D3A]"
-                  >
-                    New Account
-                  </button>
-                </div>
-              </div>
-
               <button
                 type="submit"
                 disabled={isLoading}
@@ -342,3 +312,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     </div>
   );
 };
+
+// Projects, clips, posts and editor state are cached in this browser; clear them when the
+// account changes so one user never sees another user's data.
+export function clearCachedWorkspaceData() {
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("clipflow_") && k !== "clipflow_auth_token" && k !== "clipflow_hide_beta_banner")
+      .forEach((k) => localStorage.removeItem(k));
+  } catch {}
+}

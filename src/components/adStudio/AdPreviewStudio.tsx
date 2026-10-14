@@ -214,7 +214,7 @@ export const AdPreviewStudio: React.FC<AdPreviewStudioProps> = ({
   const [ctaText, setCtaText] = useState("Claim 50% Off Today");
   const [primaryCopy, setPrimaryCopy] = useState("The retention editing secret top YouTubers use in 2026. Stop wasting hours on manual Premiere edits.");
 
-  const activeVideo = projects[0]?.sourceVideoUrl || "/sample-media/tokyo_neon.mp4";
+  const activeVideo = projects[0]?.sourceVideoUrl || "";
   const activeThumbnail = projects[0]?.sourceThumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80";
 
   // Automated Obstruction Detection Logic:

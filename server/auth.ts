@@ -264,36 +264,6 @@ export class AuthService {
     }
     writeDb(db);
   }
-
-  /**
-   * Seeds an initial creator account if users collection is empty
-   */
-  public seedInitialUserIfEmpty(): UserProfile {
-    const db = readDb();
-    if (!db.users) db.users = [];
-
-    let defaultUser = db.users.find((u: any) => u.email === "creator@clipflow.video");
-    if (!defaultUser) {
-      const salt = crypto.randomBytes(16).toString("hex");
-      const passwordHash = this.hashPassword("clipflow2026", salt);
-      defaultUser = {
-        id: "usr_default_creator",
-        email: "creator@clipflow.video",
-        name: "ClipFlow Creator",
-        avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80",
-        salt,
-        passwordHash,
-        planId: "free",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      db.users.unshift(defaultUser);
-      writeDb(db);
-    }
-
-    const { salt: _, passwordHash: __, ...profile } = defaultUser;
-    return profile;
-  }
 }
 
 export const authService = new AuthService();
