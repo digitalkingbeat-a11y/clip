@@ -1,9 +1,9 @@
+import "./server/env";
 import express from "express";
 import path from "path";
 import fs from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import dotenv from "dotenv";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -38,7 +38,6 @@ import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService } from "./server/podcastService";
 
-dotenv.config();
 
 const execFileAsync = promisify(execFile);
 
