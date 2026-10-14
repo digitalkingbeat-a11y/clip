@@ -38,6 +38,7 @@ import { affiliateService } from "./server/affiliateService";
 import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService } from "./server/podcastService";
+import { stockFootageService, stockAvailable, STOCK_CONFIG } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
 import { registerOwnedFile, resolveOwnedMediaPath } from "./server/mediaOwnership";
 
@@ -2064,7 +2065,7 @@ Return updated scene JSON with fields:
 app.get("/api/ai/video-providers", (req, res) => {
   const providers = aiVideoService.getVideoProviders().map((p: any) =>
     p.id === "google_veo"
-      ? { ...p, name: `Google Veo 3.1 Fast (${VEO_CONFIG.model})`, status: veoAvailable() ? "connected" : "unavailable",
+      ? { ...p, name: `Google Veo 3.1 Lite (${VEO_CONFIG.model})`, status: veoAvailable() ? "connected" : "unavailable",
           badge: veoAvailable() ? `${VEO_CONFIG.creditsPerSecond} credits / second` : "Needs GEMINI_API_KEY",
           costPerSecond: VEO_CONFIG.googlePriceUsdPerSecond }
       : p
@@ -2202,6 +2203,40 @@ app.post("/api/ai/render-shot", async (req: any, res) => {
   }
 });
 
+// 4a. Stock footage (free, Pexels). Falls back to a Quick preview card when there's no key or no match.
+app.get("/api/ai/stock/config", (req, res) => {
+  res.json({ success: true, available: stockAvailable(), provider: "pexels", creditsPerShot: STOCK_CONFIG.creditsPerShot,
+    creditLine: STOCK_CONFIG.creditLine, creditUrl: STOCK_CONFIG.creditUrl });
+});
+app.post("/api/ai/stock/shot", async (req: any, res) => {
+  const { shot, aspectRatio, excludeIds } = req.body || {};
+  if (!shot || !shot.id) return res.status(400).json({ success: false, error: "Shot data is required." });
+  const ar = aspectRatio === "16:9" ? "16:9" : aspectRatio === "1:1" ? "1:1" : "9:16";
+  const userId = currentUserId(req);
+  const fallback = async (notice: string) => {
+    const result = await aiVideoService.renderShot(shot, ar);
+    registerOwnedFile(result.videoUrl, userId);
+    if (result.thumbnailUrl) registerOwnedFile(result.thumbnailUrl, userId);
+    res.json({ success: true, mode: "preview", fallback: true, notice, ...result });
+  };
+  try {
+    if (!stockAvailable()) return await fallback("Stock footage isn't set up yet (no Pexels API key), so this scene uses a Quick preview card.");
+    let out: any = null;
+    try {
+      out = await stockFootageService.renderShot({ userId, shot, aspectRatio: ar, excludeIds: Array.isArray(excludeIds) ? excludeIds : [], ai: getGenAI() });
+    } catch (e: any) {
+      console.warn("stock footage error:", e?.message);
+      return await fallback(`Couldn't get stock footage (${e?.message || "error"}), so this scene uses a Quick preview card.`);
+    }
+    if (!out) return await fallback("No matching stock clip was found for this scene, so it uses a Quick preview card.");
+    const version = { id: `ver_${shot.id}_stock_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl, createdAt: new Date().toISOString() };
+    res.json({ success: true, mode: "stock", creditsUsed: 0, ...out, version });
+  } catch (err: any) {
+    console.error("stock shot error:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to render stock shot" });
+  }
+});
+
 // 4b. AI video (Veo): background jobs per shot
 function veoAvailable(): boolean {
   return !!process.env.GEMINI_API_KEY && process.env.VEO_ENABLED !== "false";
@@ -2218,7 +2253,7 @@ app.get("/api/ai/veo/config", (req, res) => {
 });
 app.post("/api/ai/veo/shots", (req: any, res) => {
   if (!veoAvailable()) {
-    return res.status(503).json({ success: false, veoUnavailable: true, error: "AI video (Veo) isn't available right now. Use Quick preview (free)." });
+    return res.status(503).json({ success: false, veoUnavailable: true, error: "AI video (Veo) isn't available right now. Use Stock footage or Quick preview (free)." });
   }
   const { shot, aspectRatio, style, idempotencyKey } = req.body || {};
   if (!shot || !shot.id) return res.status(400).json({ success: false, error: "Shot data is required." });
@@ -2297,6 +2332,10 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       });
       t += duration;
     }
+    const attributions = shots.map((s: any) => s.stockAttribution).filter((a: any) => a && a.provider === "pexels");
+    const credits = attributions.length
+      ? [STOCK_CONFIG.creditLine, ...Array.from(new Set(attributions.map((a: any) => `Video by ${a.videographer} on Pexels`)))]
+      : [];
     const outFileName = `ClipFlow_Master_${Date.now()}.mp4`;
     const outPath = path.join(STORAGE_DIRS.renders, outFileName);
     const ar = aspectRatio === "16:9" ? "16:9" : aspectRatio === "1:1" ? "1:1" : "9:16";
@@ -2320,11 +2359,12 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       sizeBytes: fs.statSync(outPath).size,
       url: `/storage/renders/${outFileName}`,
       thumbnail: masterThumbnailUrl,
-      tags: ["ai-video", "render"],
+      tags: ["ai-video", "render", ...(attributions.length ? ["pexels"] : [])],
+      ...(attributions.length ? { attribution: attributions, credits } : {}),
       createdAt: new Date().toISOString().split("T")[0],
     });
     writeDb(db);
-    res.json({ success: true, masterVideoUrl: `/storage/renders/${outFileName}`, masterThumbnailUrl, duration: t, filename: outFileName });
+    res.json({ success: true, masterVideoUrl: `/storage/renders/${outFileName}`, masterThumbnailUrl, duration: t, filename: outFileName, credits, attribution: attributions });
   } catch (err: any) {
     console.error("combine-storyboard error:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to combine storyboard" });

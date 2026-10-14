@@ -110,8 +110,11 @@ async function main() {
   check("retry completes", j3?.status === "completed");
 
   // 5. Out of credits
+  // B is on the free plan (10 credits); make the shot cost more than that whatever the per-second rate.
+  const savedRate = VEO_CONFIG.creditsPerSecond;
+  VEO_CONFIG.creditsPerSecond = Math.max(savedRate, 2);
   const r4 = svc.createJob({ userId: B, shotId: "x", prompt: "y", aspectRatio: "9:16", sceneDuration: 8 });
-  // B is on free plan: 10 credits < 16
+  VEO_CONFIG.creditsPerSecond = savedRate;
   check("insufficient credits blocks Veo job", !r4.job && r4.outOfCredits === true, r4.error || "");
 
   // 6. Real ffmpeg: fit a 6s Veo clip into a 5s scene + an 8s Veo clip held to 10s, plus captions
