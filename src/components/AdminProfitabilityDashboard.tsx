@@ -39,7 +39,7 @@ export const AdminProfitabilityDashboard: React.FC = () => {
   const fetchReport = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/admin/profitability");
+      const res = await fetch("/api/admin/profitability", { headers: { Authorization: `Bearer ${localStorage.getItem("clipflow_auth_token") || ""}` } });
       const data = await res.json();
       if (data.success) {
         setReport(data.report);
@@ -79,7 +79,7 @@ export const AdminProfitabilityDashboard: React.FC = () => {
     try {
       setRunningTests(true);
       setTestResults(null);
-      const res = await fetch("/api/tests/billing-run", { method: "POST" });
+      const res = await fetch("/api/tests/billing-run", { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem("clipflow_auth_token") || ""}` } });
       const data = await res.json();
       setTestResults(data);
       fetchReport();

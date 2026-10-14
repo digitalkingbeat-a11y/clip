@@ -64,7 +64,7 @@ export const SystemReadinessView: React.FC = () => {
     setIsRunningE2ETest(true);
     setE2eReport(null);
     try {
-      const res = await fetch("/api/system/e2e-sample-test", { method: "POST" });
+      const res = await fetch("/api/system/e2e-sample-test", { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem("clipflow_auth_token") || ""}` } });
       const data = await res.json();
       setE2eReport(data);
     } catch (err: any) {
@@ -82,7 +82,7 @@ export const SystemReadinessView: React.FC = () => {
   const checkReadiness = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/system-readiness");
+      const res = await fetch("/api/system-readiness", { headers: { Authorization: `Bearer ${localStorage.getItem("clipflow_auth_token") || ""}` } });
       const data = await res.json();
       if (data.success && Array.isArray(data.services)) {
         setServices(data.services);
@@ -98,7 +98,7 @@ export const SystemReadinessView: React.FC = () => {
   const runAutomatedTests = async () => {
     setIsRunningTests(true);
     try {
-      const res = await fetch("/api/tests/run", { method: "POST" });
+      const res = await fetch("/api/tests/run", { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem("clipflow_auth_token") || ""}` } });
       const data = await res.json();
       if (data.success && Array.isArray(data.results)) {
         setTestResults(data.results);

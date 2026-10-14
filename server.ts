@@ -341,6 +341,7 @@ async function authenticateUser(req: any, res: any, next: any) {
       const user = await authService.getUserByToken(token);
       if (user) {
         req.user = user;
+        req.isAuthenticated = true;
         return next();
       }
     }
@@ -355,6 +356,40 @@ async function authenticateUser(req: any, res: any, next: any) {
 }
 
 app.use(authenticateUser);
+
+// ----------------------------------------------------
+// ADMIN ACCESS CONTROL
+// Admins are defined by the ADMIN_EMAILS env var (comma-separated).
+// Only a real signed-in session (not the guest/demo fallback user) can be admin.
+// If ADMIN_EMAILS is unset, nobody is an admin.
+// ----------------------------------------------------
+function getAdminEmails(): string[] {
+  return (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAdminRequest(req: any): boolean {
+  if (!req.isAuthenticated || !req.user?.email) return false;
+  return getAdminEmails().includes(String(req.user.email).trim().toLowerCase());
+}
+
+function requireAdmin(req: any, res: any, next: any) {
+  if (isAdminRequest(req)) return next();
+  res.status(403).json({ success: false, error: "Forbidden: admin access required." });
+}
+
+app.use(["/api/admin", "/api/system-readiness", "/api/system/e2e-sample-test", "/api/tests"], requireAdmin);
+
+// Minimal public render-engine check (used by the export modal for all users)
+app.get("/api/render-status", async (req, res) => {
+  const readiness = await ffmpegService.checkReadiness();
+  res.json({
+    success: true,
+    services: [{ name: "FFmpeg", status: readiness.ready ? "Connected" : "Missing" }],
+  });
+});
 
 // ----------------------------------------------------
 // REAL PIPELINE API ROUTES
@@ -407,7 +442,7 @@ app.post("/api/auth/logout", async (req: any, res) => {
 });
 
 app.get("/api/auth/me", (req: any, res) => {
-  res.json({ success: true, user: req.user });
+  res.json({ success: true, user: req.user, isAdmin: isAdminRequest(req) });
 });
 
 // Authorized Media Proxy / Streaming (Supports S3 and signed media tokens)
