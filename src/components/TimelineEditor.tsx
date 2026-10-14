@@ -6054,6 +6054,122 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   }, [tracks, items, onUpdateTracks, onUpdateItems, selectedTrackId, showToast]);
 
   const renderAssetsPanelBody = (scrollRef?: React.RefObject<HTMLDivElement | null>) => (
+    <>
+    {mediaPanelTab === "media" && (
+      <div
+        id="assets-panel-header-actions"
+        className="flex items-center justify-between gap-1.5 px-2 py-1.5 border-b border-[#212735] flex-shrink-0 relative z-30"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <span className="flex items-center gap-1 text-[11px] font-bold text-gray-200 min-w-0 truncate">
+          <Folder className="w-3.5 h-3.5 text-[#16D9F5] shrink-0" />
+          <span className="truncate">Project Bin</span>
+        </span>
+        <div className="flex items-center gap-1.5">
+                    {/* Quick Upload Button */}
+                    <button
+                      id="btn-editor-upload-media"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="btn-clipflow-primary text-white text-[11px] font-bold px-2.5 py-1 rounded flex items-center gap-1 shadow-sm cursor-pointer transition-transform hover:scale-102"
+                      title="Upload video from computer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload</span>
+                    </button>
+
+                    {/* Primary Add to Timeline Button */}
+                    <button
+                      id="btn-add-to-timeline"
+                      onClick={handleAddSelectedOrFirstAsset}
+                      className="text-gray-200 hover:text-white bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-[11px] font-semibold px-2 py-1 rounded flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Add selected clip directly to timeline at playhead (+)"
+                    >
+                      <Plus className="w-3 h-3 text-[#16D9F5]" />
+                      <span>Add</span>
+                    </button>
+
+                    {/* Presets & Extra Options Dropdown */}
+                    <div className="relative">
+                      <button
+                        id="btn-add-media-picker"
+                        onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
+                        className="text-[#9CA5B5] hover:text-white bg-[#171C27] border border-[#272D3A] p-1 rounded cursor-pointer transition-colors"
+                        title="More add options (Presets, Text, Audio)"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Add Dropdown Menu */}
+                      {isAddMenuOpen && (
+                        <div className="absolute right-0 top-7 w-52 bg-[#171C27] border border-[#272D3A] rounded-xl shadow-2xl py-1.5 z-40 text-xs text-gray-200">
+                          <button
+                            onClick={() => {
+                              handleAddSelectedOrFirstAsset();
+                              setIsAddMenuOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 text-[#16D9F5] font-semibold cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add Selected to Timeline</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              fileInputRef.current?.click();
+                              setIsAddMenuOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
+                          >
+                            <Upload className="w-3.5 h-3.5 text-[#16D9F5]" />
+                            <span>Upload Local Media...</span>
+                          </button>
+                          <div className="h-px bg-[#272D3A] my-1" />
+                          <button
+                            onClick={() => {
+                              const newBroll: ProjectAsset = {
+                                id: `broll_${Date.now()}`,
+                                title: "Cinematic_City_Sunset.mp4",
+                                duration: "10s",
+                                durationSec: 10,
+                                type: "broll",
+                                img: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=300&q=80",
+                                sourceUrl: "",
+                              };
+                              setProjectAssets((prev) => [newBroll, ...prev]);
+                              handleInsertAssetToTimeline(newBroll);
+                              setIsAddMenuOpen(false);
+                              showToast("Added Sunset B-Roll to project and timeline");
+                            }}
+                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
+                          >
+                            <Film className="w-3.5 h-3.5 text-pink-400" />
+                            <span>Add Sample B-Roll</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              handleInsertTextPreset("NEW HOOK HEADLINE");
+                              setIsAddMenuOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
+                          >
+                            <Type className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Add Title Text</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              handleInsertAudioPreset("Synth Wave Beat.mp3");
+                              setIsAddMenuOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
+                          >
+                            <Music className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Add Audio Track</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+      </div>
+    )}
     <div
       ref={scrollRef}
       onScroll={handleAssetsScroll}
@@ -6305,109 +6421,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
                 <div className="flex items-center justify-between text-[11px] text-[#9CA5B5] relative gap-1 flex-wrap pt-1">
                   <span className="font-semibold text-gray-200">Timeline Ready Assets ({projectAssets.length})</span>
-                  <div className="flex items-center gap-1.5">
-                    {/* Primary Add to Timeline Button */}
-                    <button
-                      id="btn-add-to-timeline"
-                      onClick={handleAddSelectedOrFirstAsset}
-                      className="btn-clipflow-primary text-white text-[11px] font-bold px-2 py-1 rounded flex items-center gap-1 shadow-sm cursor-pointer transition-transform hover:scale-102"
-                      title="Add selected clip directly to timeline at playhead (+)"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Add</span>
-                    </button>
-
-                    {/* Quick Upload Button */}
-                    <button
-                      id="btn-editor-upload-media"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="text-gray-300 hover:text-white bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-[11px] font-medium px-2 py-1 rounded flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Upload video from computer"
-                    >
-                      <Upload className="w-3 h-3 text-[#16D9F5]" />
-                      <span>Upload</span>
-                    </button>
-
-                    {/* Presets & Extra Options Dropdown */}
-                    <div className="relative">
-                      <button
-                        id="btn-add-media-picker"
-                        onClick={() => setIsAddMenuOpen(!isAddMenuOpen)}
-                        className="text-[#9CA5B5] hover:text-white bg-[#171C27] border border-[#272D3A] p-1 rounded cursor-pointer transition-colors"
-                        title="More add options (Presets, Text, Audio)"
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* Add Dropdown Menu */}
-                      {isAddMenuOpen && (
-                        <div className="absolute right-0 top-7 w-52 bg-[#171C27] border border-[#272D3A] rounded-xl shadow-2xl py-1.5 z-40 text-xs text-gray-200">
-                          <button
-                            onClick={() => {
-                              handleAddSelectedOrFirstAsset();
-                              setIsAddMenuOpen(false);
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 text-[#16D9F5] font-semibold cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>Add Selected to Timeline</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              fileInputRef.current?.click();
-                              setIsAddMenuOpen(false);
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Upload className="w-3.5 h-3.5 text-[#16D9F5]" />
-                            <span>Upload Local Media...</span>
-                          </button>
-                          <div className="h-px bg-[#272D3A] my-1" />
-                          <button
-                            onClick={() => {
-                              const newBroll: ProjectAsset = {
-                                id: `broll_${Date.now()}`,
-                                title: "Cinematic_City_Sunset.mp4",
-                                duration: "10s",
-                                durationSec: 10,
-                                type: "broll",
-                                img: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=300&q=80",
-                                sourceUrl: "",
-                              };
-                              setProjectAssets((prev) => [newBroll, ...prev]);
-                              handleInsertAssetToTimeline(newBroll);
-                              setIsAddMenuOpen(false);
-                              showToast("Added Sunset B-Roll to project and timeline");
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Film className="w-3.5 h-3.5 text-pink-400" />
-                            <span>Add Sample B-Roll</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              handleInsertTextPreset("NEW HOOK HEADLINE");
-                              setIsAddMenuOpen(false);
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Type className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Add Title Text</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              handleInsertAudioPreset("Synth Wave Beat.mp3");
-                              setIsAddMenuOpen(false);
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Music className="w-3.5 h-3.5 text-cyan-400" />
-                            <span>Add Audio Track</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 </div>
 
                 <p className="text-[10px] text-[#9CA5B5]">
@@ -6868,6 +6881,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               </div>
             )}
               </div>
+    </>
   );
 
   return (

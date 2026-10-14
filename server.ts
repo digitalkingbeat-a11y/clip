@@ -1,9 +1,10 @@
+import "./server/env";
+import { generateContentWithRetry } from "./server/geminiRetry";
 import express from "express";
 import path from "path";
 import fs from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import dotenv from "dotenv";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -38,7 +39,6 @@ import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService } from "./server/podcastService";
 
-dotenv.config();
 
 const execFileAsync = promisify(execFile);
 
@@ -883,7 +883,48 @@ app.post(
       next();
     });
   },
-  async (req: any, res: any) => {
+  (req: any, res: any) => handleUploadedFiles(req, res)
+);
+
+// Import a video from a direct link (e.g. https://.../video.mp4) and run the same clip pipeline.
+// Platform pages (YouTube/TikTok) are not supported without a downloader.
+app.post("/api/upload/from-url", async (req: any, res: any) => {
+  try {
+    const rawUrl = String(req.body?.url || "").trim();
+    let u: URL;
+    try {
+      u = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ success: false, error: "Paste a valid video link." });
+    }
+    if (!/^https?:$/.test(u.protocol)) return res.status(400).json({ success: false, error: "Only http(s) links are supported." });
+    if (/(^|\.)(youtube\.com|youtu\.be|tiktok\.com|instagram\.com)$/i.test(u.hostname)) {
+      return res.status(400).json({
+        success: false,
+        error: "Links to YouTube/TikTok/Instagram pages can't be imported yet. Download the video and upload the file, or paste a direct link to an .mp4 file.",
+      });
+    }
+    const resp = await fetch(u.toString());
+    const type = resp.headers.get("content-type") || "";
+    if (!resp.ok) return res.status(400).json({ success: false, error: `Couldn't download that link (HTTP ${resp.status}).` });
+    if (!/^(video|application\/octet-stream)/i.test(type)) {
+      return res.status(400).json({ success: false, error: "That link isn't a video file. Paste a direct link to an .mp4/.mov file." });
+    }
+    const MAX = 1024 * 1024 * 1024;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > MAX) return res.status(413).json({ success: false, error: "Video is larger than 1 GB." });
+    const base = (path.basename(u.pathname) || "linked_video.mp4").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const originalname = path.extname(base) ? base : `${base}.mp4`;
+    const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${originalname}`);
+    fs.writeFileSync(filePath, buf);
+    req.files = [{ originalname, path: filePath, size: buf.length, mimetype: type.startsWith("video/") ? type : "video/mp4" }];
+    return handleUploadedFiles(req, res);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to import link" });
+  }
+});
+
+async function handleUploadedFiles(req: any, res: any) {
   try {
     const rawFiles: Express.Multer.File[] = (req.files as Express.Multer.File[]) || (req.file ? [req.file] : []);
     if (!rawFiles || rawFiles.length === 0) {
@@ -913,6 +954,15 @@ app.post(
         }
       }
 
+      let realThumb: string | undefined;
+      if (!isImage && !isAudio) {
+        try {
+          const thumbName = `${safeBaseName}.jpg`;
+          await ffmpegService.generateThumbnail(file.path, Math.min(1, duration / 2 || 0), path.join(STORAGE_DIRS.thumbnails, thumbName));
+          realThumb = `/storage/thumbnails/${thumbName}`;
+        } catch {}
+      }
+
       // Create MediaItem record
       const mediaItem = {
         id: `med_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -924,9 +974,7 @@ app.post(
         url: `/storage/uploads/${safeBaseName}`,
         thumbnail: isImage
           ? `/storage/uploads/${safeBaseName}`
-          : mediaType === "video" || mediaType === "broll"
-          ? "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80"
-          : undefined,
+          : realThumb,
         tags: ["upload", mediaType],
         createdAt: new Date().toISOString().split("T")[0],
       };
@@ -945,7 +993,7 @@ app.post(
           duration: Math.round(duration),
           aspectRatio: "9:16",
           sourceVideoUrl: `/storage/uploads/${safeBaseName}`,
-          sourceThumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+          sourceThumbnail: realThumb || "",
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           clipsCount: 0,
@@ -998,7 +1046,7 @@ app.post(
     console.error("Upload error:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to upload media" });
   }
-});
+}
 
 // Media Vault Library Management APIs
 app.get("/api/media", (req: any, res) => {
@@ -1208,10 +1256,13 @@ app.post("/api/render-clip", async (req: any, res) => {
 
     const userId = currentUserId(req);
     const owned = (readDb().projects || []).find((p: any) => p.id === projectId && p.userId === userId);
-    if (!owned) return res.status(404).json({ success: false, error: "Project not found" });
+    // Timeline exports (e.g. a script sent from AI Video) carry their own scenes
+    // and don't need a saved project; store them under an "editor" project key.
+    const isSceneExport = Array.isArray(options?.scenes) && options.scenes.length > 0;
+    if (!owned && !isSceneExport) return res.status(404).json({ success: false, error: "Project not found" });
     const result = await pipelineManager.renderFinalVideo(
       clipId,
-      projectId,
+      owned ? projectId : "editor",
       captions || [],
       brandKit || {},
       options || {},
@@ -1748,7 +1799,7 @@ Return strict JSON object matching:
   "thumbnailText": "..."
 }`;
 
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
         contents: prompt,
         config: { responseMimeType: "application/json" },
@@ -1810,7 +1861,7 @@ app.post("/api/ai/transcribe-audio", async (req, res) => {
       // Clean base64 header if present
       const base64Clean = audioData.includes(",") ? audioData.split(",")[1] : audioData;
       
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
         contents: [
           {
@@ -1909,7 +1960,7 @@ Return a JSON object with this exact structure:
 }`;
 
       try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry(ai, {
           model: "gemini-3.8-flash",
           contents: promptPayload,
           config: {
@@ -1982,7 +2033,7 @@ Return updated scene JSON with fields:
 - mediaType ("${scene.mediaType || 'image'}")`;
 
       try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry(ai, {
           model: "gemini-3.8-flash",
           contents: promptText,
           config: { responseMimeType: "application/json" },

@@ -508,13 +508,15 @@ export class PipelineManager {
       }
     }
 
-    if (!inputClipPath) {
+    const hasScenes = !!(options && Array.isArray((options as any).scenes) && (options as any).scenes.length > 0);
+
+    if (!inputClipPath && !hasScenes) {
       if (!clip) throw new Error("Clip not found.");
       inputClipPath = path.join(STORAGE_DIRS.clips, `clip_916_${clip.id}.mp4`);
     }
 
     // Never substitute a sample or another user's upload for a missing clip.
-    if (!fs.existsSync(inputClipPath)) {
+    if (!hasScenes && !fs.existsSync(inputClipPath)) {
       throw new Error("The source video for this clip is missing. Please re-upload it.");
     }
 
@@ -522,7 +524,7 @@ export class PipelineManager {
     const renderPath = path.join(STORAGE_DIRS.renders, renderFilename);
 
     try {
-      if (options && (options as any).scenes && Array.isArray((options as any).scenes) && (options as any).scenes.length > 0) {
+      if (hasScenes) {
         await ffmpegService.renderSequenceWithCaptions((options as any).scenes, captions, brandKit, renderPath, options);
       } else {
         await ffmpegService.renderClipWithCaptions(inputClipPath, captions, brandKit, renderPath, options);

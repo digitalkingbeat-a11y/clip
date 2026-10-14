@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { DashboardView } from "./components/DashboardView";
-import { AIClipsWorkflow } from "./components/AIClipsWorkflow";
+import { ClipsStudio } from "./components/ClipsStudio";
 import { AIVideoGenerator } from "./components/AIVideoGenerator";
 import { TimelineEditor } from "./components/TimelineEditor";
 import { CalendarView } from "./components/CalendarView";
@@ -1080,6 +1080,8 @@ export default function App() {
           creditBalance={creditBalance}
           onOpenPricing={() => setCurrentView("pricing")}
           onOpenBuyCredits={() => setCurrentView("pricing")}
+          onOpenTikTokAds={() => setIsTikTokAdsModalOpen(true)}
+          onOpenInstall={canInstall ? () => setIsPWAInstallModalOpen(true) : undefined}
           onOpenCreatorProgram={() => setIsCreatorProgramModalOpen(true)}
         />
       )}
@@ -1114,6 +1116,7 @@ export default function App() {
               setIsMainNavOpen(false);
               setCurrentView("pricing");
             }}
+            onOpenTikTokAds={() => { setIsTikTokAdsModalOpen(true); setIsMainNavOpen(false); }}
             onOpenCreatorProgram={() => {
               setIsMainNavOpen(false);
               setIsCreatorProgramModalOpen(true);
@@ -1185,7 +1188,7 @@ export default function App() {
             onOpenTikTokAds={() => setIsTikTokAdsModalOpen(true)}
             currentUser={currentUser}
             onOpenAuthModal={() => setIsAuthModalOpen(true)}
-            onOpenCreatorProgram={() => setIsCreatorProgramModalOpen(true)}
+          onOpenCreatorProgram={() => setIsCreatorProgramModalOpen(true)}
             onNavigateView={(v) => setCurrentView(v)}
           />
         )}
@@ -1467,7 +1470,12 @@ export default function App() {
           )}
 
           {currentView === "ai_clips" && (
-            <AIClipsWorkflow
+            <ClipsStudio
+              onProjectReady={(project) => {
+                setProjects((prev) => [project, ...prev.filter((p) => p.id !== project.id)]);
+                setActiveProject(project);
+                if (Array.isArray((project as any).clips)) setClips((project as any).clips);
+              }}
               clips={clips}
               brandKit={brandKit}
               onUpdateClip={handleUpdateClip}

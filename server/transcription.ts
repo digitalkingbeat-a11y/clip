@@ -1,6 +1,7 @@
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { TimedCaptionWord } from "./ffmpeg";
+import { generateContentWithRetry } from "./geminiRetry";
 
 export interface TranscriptSegment {
   text: string;
@@ -35,7 +36,7 @@ export class TranscriptionService {
           const audioBuffer = fs.readFileSync(audioFilePath);
           const base64Audio = audioBuffer.toString("base64");
 
-          const response = await genAIClient.models.generateContent({
+          const response = await generateContentWithRetry(genAIClient, {
             model: "gemini-3.8-flash",
             contents: [
               {
@@ -92,12 +93,14 @@ Ensure all 'start' and 'end' values are valid floating-point numbers in seconds,
           }
         }
       } catch (err: any) {
-        console.warn("Gemini direct audio transcription error, using synthesized transcript:", err.message);
+        console.warn("Gemini audio transcription failed:", err.message);
+        throw new Error("Transcription failed: the AI service is unavailable right now. Please retry this job in a minute.");
       }
+      // Gemini answered but returned no words (e.g. silent audio). Never invent speech.
+      return { fullTranscript: "", words: [], segments: [] };
     }
 
-    // High quality fallback transcription aligned to audio duration
-    return this.generateAlignedTranscript(durationSec);
+    throw new Error("Transcription isn't available (GEMINI_API_KEY is not set).");
   }
 
   /**

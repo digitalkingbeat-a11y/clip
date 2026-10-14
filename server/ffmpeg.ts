@@ -7,8 +7,12 @@ import ffmpegStatic from "ffmpeg-static";
 // @ts-ignore
 import ffprobeStatic from "ffprobe-static";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Works both under tsx (ESM) and in the bundled CJS build (dist/server.cjs),
+// where import.meta.url is undefined.
+const moduleDir: string =
+  typeof __dirname !== "undefined"
+    ? __dirname
+    : path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 
 export interface ProbeResult {
@@ -118,11 +122,11 @@ export class FFmpegService {
       process.env.FFMPEG_PATH,
       process.env.FFMPEG_BIN,
       projectBinFfmpeg,
-      path.resolve(__dirname, "..", "bin", isWin ? "ffmpeg.exe" : "ffmpeg"),
-      path.resolve(__dirname, "bin", isWin ? "ffmpeg.exe" : "ffmpeg"),
+      path.resolve(moduleDir, "..", "bin", isWin ? "ffmpeg.exe" : "ffmpeg"),
+      path.resolve(moduleDir, "bin", isWin ? "ffmpeg.exe" : "ffmpeg"),
       staticFfmpeg,
       path.resolve(process.cwd(), "node_modules", "ffmpeg-static", isWin ? "ffmpeg.exe" : "ffmpeg"),
-      path.resolve(__dirname, "..", "node_modules", "ffmpeg-static", isWin ? "ffmpeg.exe" : "ffmpeg"),
+      path.resolve(moduleDir, "..", "node_modules", "ffmpeg-static", isWin ? "ffmpeg.exe" : "ffmpeg"),
       whichFfmpeg,
       "/usr/bin/ffmpeg",
       "/usr/local/bin/ffmpeg",
@@ -154,11 +158,11 @@ export class FFmpegService {
       process.env.FFPROBE_PATH,
       process.env.FFPROBE_BIN,
       projectBinFfprobe,
-      path.resolve(__dirname, "..", "bin", isWin ? "ffprobe.exe" : "ffprobe"),
-      path.resolve(__dirname, "bin", isWin ? "ffprobe.exe" : "ffprobe"),
+      path.resolve(moduleDir, "..", "bin", isWin ? "ffprobe.exe" : "ffprobe"),
+      path.resolve(moduleDir, "bin", isWin ? "ffprobe.exe" : "ffprobe"),
       staticFfprobe,
       path.resolve(process.cwd(), "node_modules", "ffprobe-static", "bin", "linux", "x64", "ffprobe"),
-      path.resolve(__dirname, "..", "node_modules", "ffprobe-static", "bin", "linux", "x64", "ffprobe"),
+      path.resolve(moduleDir, "..", "node_modules", "ffprobe-static", "bin", "linux", "x64", "ffprobe"),
       whichFfprobe,
       "/usr/bin/ffprobe",
       "/usr/local/bin/ffprobe",
@@ -708,9 +712,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let inputPath = "";
         if (sc.sourceUrl) {
           const rawFilename = path.basename(sc.sourceUrl.split("?")[0]);
-          const potentialUpload = path.join(path.dirname(outRenderPath), "..", "uploads", rawFilename);
-          if (fs.existsSync(potentialUpload)) {
-            inputPath = potentialUpload;
+          // Timeline scenes can point at uploads or at shots rendered by AI Video (renders/).
+          const storageRoot = path.join(path.dirname(outRenderPath), "..");
+          for (const dir of ["uploads", "renders"]) {
+            const candidate = path.join(storageRoot, dir, rawFilename);
+            if (fs.existsSync(candidate)) {
+              inputPath = candidate;
+              break;
+            }
           }
         }
 
@@ -732,12 +741,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             segPath
           );
         } else {
-          // Generate synthetic video card with tone
+          // No source media: plain colour card with silent audio
           segArgs.push(
             "-f", "lavfi",
             "-i", `color=c=${chosenColor}:s=${targetW}x${targetH}:d=${segDuration.toFixed(3)}:r=30`,
             "-f", "lavfi",
-            "-i", `sine=frequency=${220 + i * 55}:duration=${segDuration.toFixed(3)}`,
+            "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", segDuration.toFixed(3),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",
