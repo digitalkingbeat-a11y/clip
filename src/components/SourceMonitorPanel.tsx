@@ -346,9 +346,9 @@ export const SourceMonitorPanel: React.FC<SourceMonitorPanelProps> = ({
                       onClick={() => {
                         console.info("[SourceMonitor] Switching to verified local video asset fallback");
                         setPreviewMediaError(null);
-                        setEffectiveSrc("/sample-media/tokyo_neon.mp4");
+                        setEffectiveSrc("");
                         if (videoRef.current) {
-                          videoRef.current.src = "/sample-media/tokyo_neon.mp4";
+                          videoRef.current.src = "";
                           videoRef.current.load();
                         }
                         showToast?.("Loaded verified preview asset");

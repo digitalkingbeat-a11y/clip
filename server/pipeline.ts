@@ -509,22 +509,13 @@ export class PipelineManager {
     }
 
     if (!inputClipPath) {
-      const inputClipFilename = clip ? `clip_916_${clip.id}.mp4` : `sample_test.mp4`;
-      inputClipPath = path.join(STORAGE_DIRS.clips, inputClipFilename);
+      if (!clip) throw new Error("Clip not found.");
+      inputClipPath = path.join(STORAGE_DIRS.clips, `clip_916_${clip.id}.mp4`);
     }
 
+    // Never substitute a sample or another user's upload for a missing clip.
     if (!fs.existsSync(inputClipPath)) {
-      inputClipPath = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-    }
-
-    if (!fs.existsSync(inputClipPath)) {
-      // Find any mp4 file in uploads directory as fallback
-      const uploadFiles = fs.readdirSync(STORAGE_DIRS.uploads).filter((f) => f.endsWith(".mp4"));
-      if (uploadFiles.length > 0) {
-        inputClipPath = path.join(STORAGE_DIRS.uploads, uploadFiles[0]);
-      } else {
-        throw new Error(`Input clip file not found on disk at: ${inputClipPath}`);
-      }
+      throw new Error("The source video for this clip is missing. Please re-upload it.");
     }
 
     const renderFilename = `ClipFlow_Render_${clipId}_${Date.now()}.mp4`;
@@ -538,16 +529,7 @@ export class PipelineManager {
       }
     } catch (renderError: any) {
       console.warn("[PipelineManager] Render execution warning:", renderError.message);
-      if (!fs.existsSync(renderPath)) {
-        if (fs.existsSync(inputClipPath)) {
-          fs.copyFileSync(inputClipPath, renderPath);
-        } else {
-          const defaultSample = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-          if (fs.existsSync(defaultSample)) {
-            fs.copyFileSync(defaultSample, renderPath);
-          }
-        }
-      }
+      throw new Error(`Rendering failed: ${renderError.message}`);
     }
 
     // Upload rendered master MP4 to Cloudflare R2 / storage

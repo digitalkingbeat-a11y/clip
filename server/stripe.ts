@@ -93,7 +93,8 @@ export async function createCheckoutSession(params: {
   const plan = PLANS[params.planId];
   if (!plan) throw new Error(`Invalid plan: ${params.planId}`);
 
-  const workspaceId = params.workspaceId || "workspace_default";
+  const workspaceId = params.workspaceId;
+  if (!workspaceId) throw new Error("Sign in to upgrade.");
   const stripe = getStripe();
 
   if (stripe && isStripeConfigured()) {
@@ -111,7 +112,7 @@ export async function createCheckoutSession(params: {
         workspaceId,
         planId: plan.id,
       },
-      success_url: `${params.successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${params.successUrl}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: params.cancelUrl,
     });
 
@@ -122,15 +123,40 @@ export async function createCheckoutSession(params: {
     };
   }
 
-  // Sandbox simulation mode (when Stripe API key is not yet set in environment)
-  const sessionId = `cs_sandbox_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-  const checkoutUrl = `/checkout/sandbox?session_id=${sessionId}&plan=${plan.id}&workspace=${workspaceId}`;
+  // No Stripe key: never fake an upgrade.
+  throw new Error("Payments aren't set up yet (STRIPE_SECRET_KEY is missing). Please try again later.");
+}
 
-  return {
-    checkoutUrl,
-    sessionId,
-    isSandbox: true,
-  };
+// One-time checkout for an AI credit pack. Credits are added only by the verified webhook.
+export async function createCreditPackCheckoutSession(params: {
+  pack: { id: string; name: string; credits: number; priceUsd: number };
+  workspaceId: string;
+  successUrl: string;
+  cancelUrl: string;
+}): Promise<{ checkoutUrl: string; sessionId: string; isSandbox: boolean }> {
+  const stripe = getStripe();
+  if (!stripe || !isStripeConfigured()) {
+    throw new Error("Payments aren't set up yet (STRIPE_SECRET_KEY is missing). Please try again later.");
+  }
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    payment_method_types: ["card"],
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          unit_amount: Math.round(params.pack.priceUsd * 100),
+          product_data: { name: `${params.pack.name} (${params.pack.credits} AI credits)` },
+        },
+        quantity: 1,
+      },
+    ],
+    client_reference_id: params.workspaceId,
+    metadata: { kind: "credit_pack", packId: params.pack.id, workspaceId: params.workspaceId },
+    success_url: `${params.successUrl}&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: params.cancelUrl,
+  });
+  return { checkoutUrl: session.url || "", sessionId: session.id, isSandbox: false };
 }
 
 // Process Webhook Event through Billing Service
@@ -141,7 +167,12 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
   switch (eventType) {
     case "checkout.session.completed": {
       const session = event.data.object;
-      const workspaceId = session.client_reference_id || session.metadata?.workspaceId || "workspace_default";
+      const workspaceId = session.client_reference_id || session.metadata?.workspaceId;
+      if (!workspaceId) return { success: false, action: "ignored_missing_workspace" };
+      if (session.metadata?.kind === "credit_pack") {
+        const r = billingService.purchaseCreditPack(session.metadata.packId, workspaceId, eventId);
+        return { success: true, action: "credit_pack_added", details: { workspaceId, ...r } };
+      }
       const planId = session.metadata?.planId || "creator";
       const subId = session.subscription || `sub_stripe_${Date.now()}`;
 
@@ -164,7 +195,9 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
       const subId = invoice.subscription;
       const customerId = invoice.customer;
 
-      const sub = billingService.getSubscription();
+      const wsId = billingService.findWorkspaceByStripeSubscription(subId);
+      if (!wsId) return { success: false, action: "ignored_unknown_subscription" };
+      const sub = billingService.getSubscription(wsId);
       const res = billingService.handleSubscriptionEvent({
         id: eventId,
         type: eventType,
@@ -173,6 +206,7 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
         planId: sub.planId,
         status: "active",
         currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        workspaceId: wsId,
       });
 
       return { success: true, action: "renewal_succeeded", details: res };
@@ -180,8 +214,9 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
 
     case "invoice.payment_failed": {
       const invoice = event.data.object;
-      const sub = billingService.getSubscription();
-      sub.status = "past_due";
+      const wsId = billingService.findWorkspaceByStripeSubscription(invoice.subscription);
+      if (!wsId) return { success: false, action: "ignored_unknown_subscription" };
+      const sub = billingService.getSubscription(wsId);
 
       billingService.handleSubscriptionEvent({
         id: eventId,
@@ -190,6 +225,7 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
         planId: sub.planId,
         status: "past_due",
         currentPeriodEnd: sub.currentPeriodEnd,
+        workspaceId: wsId,
       });
 
       return { success: true, action: "payment_failed_flagged" };
@@ -197,7 +233,7 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
 
     case "customer.subscription.deleted": {
       const subscription = event.data.object;
-      const workspaceId = subscription.client_reference_id || subscription.metadata?.workspaceId || "workspace_default";
+      const workspaceId = subscription.client_reference_id || subscription.metadata?.workspaceId || billingService.findWorkspaceByStripeSubscription(subscription.id);
       // Revert to free plan on subscription deletion
       const res = billingService.handleSubscriptionEvent({
         id: eventId,
@@ -214,7 +250,7 @@ export function processStripeWebhookEvent(event: any): { success: boolean; actio
 
     case "customer.subscription.updated": {
       const subscription = event.data.object;
-      const workspaceId = subscription.client_reference_id || subscription.metadata?.workspaceId || "workspace_default";
+      const workspaceId = subscription.client_reference_id || subscription.metadata?.workspaceId || billingService.findWorkspaceByStripeSubscription(subscription.id);
       const planId = subscription.metadata?.planId || "creator";
       const res = billingService.handleSubscriptionEvent({
         id: eventId,

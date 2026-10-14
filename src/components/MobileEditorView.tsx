@@ -776,7 +776,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
             src={
               activeVideoClip?.sourceUrl ||
               activeProject?.sourceVideoUrl ||
-              "/sample-media/tokyo_neon.mp4"
+              ""
             }
             playsInline
             muted={volumeVal === 0}
@@ -1152,7 +1152,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
                   type: "video",
                   size: "12.4 MB",
                   duration: 5,
-                  url: "/sample-media/tokyo_neon.mp4",
+                  url: "",
                 };
                 handleAddFromLibrary(sampleAsset);
               }}

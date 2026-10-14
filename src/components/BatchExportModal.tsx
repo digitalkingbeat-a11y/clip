@@ -253,7 +253,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           title: c.title,
           status: "completed",
           progress: 100,
-          renderUrl: c.videoUrl || "/sample-media/tokyo_neon.mp4",
+          renderUrl: c.videoUrl || "",
           filename: `ClipFlow_Batch_${c.id}_916.mp4`,
         }))
       );

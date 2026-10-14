@@ -697,7 +697,7 @@ export const TikTokAdsModal: React.FC<TikTokAdsModalProps> = ({
               <div className="relative w-full max-w-[240px] aspect-[9/16] bg-black rounded-2xl overflow-hidden border border-[#272D3A] shadow-2xl flex flex-col justify-between">
                 {/* Video Element */}
                 <video
-                  src={selectedVideoUrl || "/sample-media/tokyo_neon.mp4"}
+                  src={selectedVideoUrl || ""}
                   className="absolute inset-0 w-full h-full object-cover"
                   playsInline
                   muted

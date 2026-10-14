@@ -361,7 +361,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
             recommendedCrop: "9:16 Centered Speaker Focus",
             status: "suggested",
             videoUrl: videoInfo.url,
-            thumbnailUrl: activeProject?.sourceThumbnail || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80",
+            thumbnailUrl: activeProject?.sourceThumbnail || "",
             captions: c.sampleCaptions || [],
           }));
         }
@@ -391,7 +391,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
             recommendedCrop: "9:16 Centered Speaker Focus",
             status: "suggested",
             videoUrl: videoInfo.url,
-            thumbnailUrl: activeProject?.sourceThumbnail || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80",
+            thumbnailUrl: activeProject?.sourceThumbnail || "",
             captions: [],
           });
         }
@@ -456,7 +456,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
         recommendedCrop: "9:16 Centered Speaker Focus",
         status: "suggested",
         videoUrl: url,
-        thumbnailUrl: thumb || selectedClip?.thumbnailUrl || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80",
+        thumbnailUrl: thumb || selectedClip?.thumbnailUrl || "",
         captions: [],
       },
       {
@@ -479,7 +479,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
         recommendedCrop: "9:16 Centered Speaker Focus",
         status: "suggested",
         videoUrl: url,
-        thumbnailUrl: thumb || selectedClip?.thumbnailUrl || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80",
+        thumbnailUrl: thumb || selectedClip?.thumbnailUrl || "",
         captions: [],
       },
     ];
@@ -530,9 +530,9 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
   const runAnalysis = async () => {
     setIsAnalyzing(true);
     const sourceDuration = uploadedLongVideo?.duration || selectedClip?.duration || activeProject?.duration || 120;
-    const sourceUrl = uploadedLongVideo?.url || selectedClip?.videoUrl || activeProject?.sourceVideoUrl || "/sample-media/tokyo_neon.mp4";
+    const sourceUrl = uploadedLongVideo?.url || selectedClip?.videoUrl || activeProject?.sourceVideoUrl || (activeProject?.sourceVideoUrl || "");
     const sourceTitle = uploadedLongVideo?.name || activeProject?.name || "Long Video Recording";
-    const sourceThumb = selectedClip?.thumbnailUrl || activeProject?.sourceThumbnail || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80";
+    const sourceThumb = selectedClip?.thumbnailUrl || activeProject?.sourceThumbnail || "";
 
     try {
       let candidateClips: ClipItem[] = [];
@@ -544,7 +544,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
           body: JSON.stringify({
             videoTitle: sourceTitle,
             customFocus: customPrompt || "High hook retention, actionable tactics",
-            transcriptText: SAMPLE_VIDEOS[0]?.transcript || "",
+            transcriptText: "",
           }),
         });
         const data = await res.json();
@@ -571,48 +571,10 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
         console.warn("AI analyze-clips endpoint fallback to duration-based heuristics:", fetchErr);
       }
 
-      // If server returned 0 or failed, generate duration-based segments from source video
+      // No made-up clips: if AI analysis didn't return real moments, say so.
       if (candidateClips.length === 0) {
-        const segDuration = Math.min(30, Math.max(15, Math.floor(sourceDuration / 4)));
-        const numSegments = Math.min(4, Math.max(2, Math.floor(sourceDuration / segDuration)));
-
-        const heuristicAngles = [
-          { hook: "The contrarian perspective on growth", tag: "Opening Hook", score: 97 },
-          { hook: "Step-by-step framework broken down", tag: "Tactical Tutorial", score: 94 },
-          { hook: "The #1 mistake stopping most creators", tag: "Warning / Insight", score: 91 },
-          { hook: "Summary action items and closing key takeaway", tag: "Actionable CTA", score: 88 },
-        ];
-
-        for (let i = 0; i < numSegments; i++) {
-          const sTime = Math.min(i * segDuration, Math.max(0, sourceDuration - segDuration));
-          const eTime = Math.min(sTime + segDuration, sourceDuration);
-          const dur = Math.max(5, eTime - sTime);
-          const angle = heuristicAngles[i % heuristicAngles.length];
-
-          candidateClips.push({
-            id: `clip_cand_${Date.now()}_${i + 1}`,
-            projectId: activeProject?.id || "proj_podcast_01",
-            title: `${sourceTitle} • Clip ${i + 1} (${angle.tag})`,
-            startTime: sTime,
-            endTime: eTime,
-            duration: dur,
-            hook: angle.hook,
-            summary: `Automated ${dur}s high-retention candidate extracted from ${sTime.toFixed(0)}s-${eTime.toFixed(0)}s in source video.`,
-            scores: {
-              hookStrength: angle.score + 2,
-              contextCompleteness: angle.score - 2,
-              contentRelevance: angle.score,
-              engagementPotential: angle.score - 1,
-              overall: angle.score,
-            },
-            tags: ["AI Moment", angle.tag, "Duration Segment"],
-            recommendedCrop: "9:16 Centered Speaker Focus",
-            status: "suggested",
-            videoUrl: sourceUrl,
-            thumbnailUrl: sourceThumb,
-            captions: selectedClip?.captions || [],
-          });
-        }
+        alert("AI clip detection couldn't analyze this video right now. Upload a video to run the real clipping pipeline, or try again later.");
+        return;
       }
 
       // Commit all generated candidate clips
@@ -651,7 +613,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
           body: JSON.stringify({
             videoTitle: activeProject?.name || "The Future of Creator Economy (Ep. 42)",
             customFocus: "7 distinct daily angles: contrarian warning, tactical tutorial, shortcut, mistake, case study, micro-tip, and strategy.",
-            transcriptText: SAMPLE_VIDEOS[0].transcript,
+            transcriptText: "",
           }),
         });
         const data = await res.json();
@@ -669,8 +631,8 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
             tags: ["Weekly Clip", DEFAULT_WEEKLY_SLOTS[idx]?.dayName || "Daily Post"],
             recommendedCrop: "9:16 Face Lock & Auto-Zoom",
             status: publishingMode === "auto_schedule" ? ("approved" as const) : ("suggested" as const),
-            videoUrl: "/sample-media/tokyo_neon.mp4",
-            thumbnailUrl: SAMPLE_VIDEOS[0].thumbnail,
+            videoUrl: (activeProject?.sourceVideoUrl || ""),
+            thumbnailUrl: "",
             captions: c.sampleCaptions || [
               { word: "Here", start: 0, end: 0.3 },
               { word: "is", start: 0.3, end: 0.5 },
@@ -692,6 +654,11 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
       setGenerationStep("Assigning 7 clips to Monday–Sunday calendar schedule...");
       await new Promise((r) => setTimeout(r, 500));
 
+      if (generatedClips.length === 0) {
+        alert("AI clip detection couldn't analyze this video right now, so no weekly plan was created.");
+        return;
+      }
+
       // Build 7 scheduled weekly slots
       const populatedSlots: WeeklyClipSlot[] = weeklySlots.slice(0, clipCount).map((slot, idx) => {
         const clipForSlot = generatedClips[idx] || {
@@ -707,8 +674,8 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
           tags: ["Weekly Plan", slot.dayName],
           recommendedCrop: "9:16 Face Lock",
           status: publishingMode === "auto_schedule" ? ("approved" as const) : ("suggested" as const),
-          videoUrl: "/sample-media/tokyo_neon.mp4",
-          thumbnailUrl: SAMPLE_VIDEOS[0].thumbnail,
+          videoUrl: (activeProject?.sourceVideoUrl || ""),
+          thumbnailUrl: "",
           captions: [
             { word: "Watch", start: 0, end: 0.4 },
             { word: "this", start: 0.4, end: 0.7 },
@@ -1281,7 +1248,7 @@ export const AIClipsWorkflow: React.FC<AIClipsWorkflowProps> = ({
                         {slot.clip ? (
                           <div className="aspect-[9/16] max-h-[170px] w-full bg-black rounded-xl overflow-hidden relative border border-[#272D3A] mb-3 group">
                             <img
-                              src={slot.clip.thumbnailUrl || SAMPLE_VIDEOS[0].thumbnail}
+                              src={slot.clip.thumbnailUrl || ""}
                               alt={slot.clip.title}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />

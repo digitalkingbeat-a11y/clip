@@ -32,72 +32,8 @@ export interface CreativeItem {
   placements?: string[];
 }
 
-export const INITIAL_CREATIVE_ITEMS: CreativeItem[] = [
-  {
-    id: "lib_01",
-    name: "ClipFlow Q4 Viral SaaS Acquisition — TikTok",
-    product: "ClipFlow Studio Pro",
-    campaign: "Q4 Viral SaaS Acquisition",
-    platform: "tiktok",
-    aspectRatio: "9:16" as AspectRatio,
-    duration: 30,
-    hookAngle: "Why 90% of Video Ads Flop",
-    cta: "Try Free for 14 Days",
-    thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "/sample-media/tokyo_neon.mp4",
-    status: "live",
-    ctr: "4.1%",
-    placements: ["FB Reels 9:16", "IG Reels 9:16"],
-  },
-  {
-    id: "lib_02",
-    name: "Meta Reels Retargeting — 14-Day Pro Offer",
-    product: "ClipFlow Retargeting",
-    campaign: "Meta Retargeting Offer",
-    platform: "instagram_reels",
-    aspectRatio: "9:16" as AspectRatio,
-    duration: 25,
-    hookAngle: "Editing Before vs After ClipFlow",
-    cta: "Claim 50% Off Today",
-    thumbnail: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&q=80",
-    videoUrl: "/sample-media/studio_camera.mp4",
-    status: "live",
-    ctr: "4.6%",
-    placements: ["IG Reels 9:16", "IG Stories 9:16"],
-  },
-  {
-    id: "lib_03",
-    name: "Square Feed High-Conversion Demo",
-    product: "LumiBar Studio Light",
-    campaign: "DTC Problem-Solution",
-    platform: "facebook_ads",
-    aspectRatio: "1:1" as AspectRatio,
-    duration: 30,
-    hookAngle: "Stop Wasting Time on Ring Lights",
-    cta: "Shop Now",
-    thumbnail: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
-    videoUrl: "/sample-media/tokyo_neon.mp4",
-    status: "ready",
-    ctr: "2.9%",
-    placements: ["FB Feed 1:1", "IG Feed 1:1"],
-  },
-  {
-    id: "lib_04",
-    name: "YouTube Shorts Creator Lead Gen",
-    product: "ClipFlow Podcast Stems",
-    campaign: "YouTube Shorts Lead Gen",
-    platform: "youtube_shorts",
-    aspectRatio: "9:16" as AspectRatio,
-    duration: 35,
-    hookAngle: "Why Zoom is Ruining Your Podcasts",
-    cta: "Open Free Studio Room",
-    thumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "/sample-media/tokyo_neon.mp4",
-    status: "prepared",
-    ctr: "3.8%",
-    placements: ["FB Feed 4:5", "IG Feed 4:5"],
-  },
-];
+// No sample data: real items come from the signed-in user.
+export const INITIAL_CREATIVE_ITEMS: CreativeItem[]  = [];
 
 interface CreativeLibraryViewProps {
   projects: Project[];

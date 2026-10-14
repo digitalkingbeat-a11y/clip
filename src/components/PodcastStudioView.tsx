@@ -76,12 +76,19 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   onSessionSavedToProjects,
   onTracksAddedToMediaLibrary,
 }) => {
+  const currentHostName = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("clipflow_user_profile") || "{}").name || "Host";
+    } catch {
+      return "Host";
+    }
+  })();
   // Studio View State: "lobby" | "setup" | "studio" | "post_recording"
   const [currentStep, setCurrentStep] = useState<"lobby" | "setup" | "studio" | "post_recording">("lobby");
   const [sessionList, setSessionList] = useState<PodcastSession[]>([]);
   const [activeSession, setActiveSession] = useState<PodcastSession | null>(null);
   const [userRole, setUserRole] = useState<"host" | "guest">("host");
-  const [participantName, setParticipantName] = useState<string>("Alex Host");
+  const [participantName, setParticipantName] = useState<string>(currentHostName);
   const [guestJoinName, setGuestJoinName] = useState<string>("John Knox (Guest)");
 
   // Hardware Setup State
@@ -207,7 +214,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
       id: sessionIdOrCode,
       title: "Double-Ender Interview with John Knox",
       hostId: "host_01",
-      hostName: "Alex Host",
+      hostName: currentHostName,
       inviteCode: sessionIdOrCode.slice(-6).toUpperCase(),
       inviteUrl: `${window.location.origin}/?podcastSession=${sessionIdOrCode}`,
       status: "setup",
@@ -218,7 +225,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
       participants: [
         {
           id: "p_host",
-          name: "Alex Host",
+          name: currentHostName,
           role: "host",
           avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
           isMuted: false,
@@ -883,7 +890,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     }
 
     const hostVideoUrl = "/storage/uploads/sample_test.mp4";
-    const guestVideoUrl = "/sample-media/studio_camera.mp4";
+    const guestVideoUrl = "";
     const duration = Math.max(15, activeSession?.recordingDurationSec || recordTimerSec || 30);
     const switches =
       liveSwitchEvents.length > 0
@@ -1573,7 +1580,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   ) : activeCamera === "cam_guest" ? (
                     <video
                       ref={guestVideoRef}
-                      src="/sample-media/studio_camera.mp4"
+                      src=""
                       autoPlay
                       playsInline
                       loop
@@ -1583,7 +1590,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   ) : activeCamera === "cam_guest_2" ? (
                     <video
                       ref={guest2VideoRef}
-                      src="/sample-media/creator_trap.mp4"
+                      src=""
                       autoPlay
                       playsInline
                       loop
@@ -1598,7 +1605,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                         <span className="absolute bottom-2 left-2 text-[10px] font-bold text-white bg-black/70 px-2 py-0.5 rounded">{participantName}</span>
                       </div>
                       <div className="bg-[#11151E] rounded-xl overflow-hidden relative">
-                        <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="/sample-media/studio_camera.mp4" />
+                        <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
                         <span className="absolute bottom-2 left-2 text-[10px] font-bold text-white bg-black/70 px-2 py-0.5 rounded">{guestJoinName}</span>
                       </div>
                     </div>
@@ -1643,7 +1650,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {activeCamera === "cam_guest" && (
                       <span className="absolute bottom-1 right-1 z-10 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                     )}
-                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="/sample-media/studio_camera.mp4" />
+                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
                   </div>
 
                   {/* Guest 2 / Co-Host Thumb */}
@@ -1659,7 +1666,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {activeCamera === "cam_guest_2" && (
                       <span className="absolute bottom-1 right-1 z-10 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                     )}
-                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="/sample-media/creator_trap.mp4" />
+                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
                   </div>
 
                   {/* Split Thumb */}
@@ -1800,7 +1807,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   {/* Guest Video */}
                   <video
                     ref={guestVideoRef}
-                    src="/sample-media/studio_camera.mp4"
+                    src=""
                     autoPlay
                     playsInline
                     loop
@@ -1875,7 +1882,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {/* Reaction / Co-Host Video Stream */}
                     <video
                       ref={guest2VideoRef}
-                      src="/sample-media/creator_trap.mp4"
+                      src=""
                       autoPlay
                       playsInline
                       loop
@@ -2315,7 +2322,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                 <video
                   src={
                     activeCamera === "cam_guest"
-                      ? "/sample-media/studio_camera.mp4"
+                      ? ""
                       : "/storage/uploads/sample_test.mp4"
                   }
                   controls
@@ -2400,7 +2407,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
               </div>
               <div className="aspect-video bg-black rounded-lg overflow-hidden relative">
                 <video
-                  src="/sample-media/studio_camera.mp4"
+                  src=""
                   controls
                   className="w-full h-full object-cover"
                 />

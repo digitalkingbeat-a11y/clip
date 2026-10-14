@@ -92,49 +92,9 @@ export interface ContentVariant {
   status: "draft" | "ready" | "scheduled" | "exported";
 }
 
-// Built-in Stock Presets for reliable initial reference library
-const DEFAULT_REFERENCES: VideoReference[] = [
-  {
-    id: "ref_pers_01",
-    name: "Alex - Founder Persona",
-    category: "person",
-    url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80",
-    mediaType: "image",
-    thumbnailUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
-    notes: "Main presenter character: tech founder, navy casual jacket, confident tone",
-    createdAt: "2025-03-01T10:00:00Z",
-  },
-  {
-    id: "ref_prod_01",
-    name: "ClipFlow AI App Dashboard",
-    category: "product",
-    url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80",
-    mediaType: "image",
-    thumbnailUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=150&q=80",
-    notes: "Core SaaS UI: dark glassmorphism, wave audio visualizer, vibrant purple accents",
-    createdAt: "2025-03-01T10:00:00Z",
-  },
-  {
-    id: "ref_loc_01",
-    name: "High-Tech Studio Loft",
-    category: "location",
-    url: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=600&q=80",
-    mediaType: "image",
-    thumbnailUrl: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=150&q=80",
-    notes: "Acoustic wood slats, warm spotlight, minimalist podcast microphones",
-    createdAt: "2025-03-01T10:00:00Z",
-  },
-  {
-    id: "ref_obj_01",
-    name: "Hormozi Kinetic Captions Phone",
-    category: "object",
-    url: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-    mediaType: "image",
-    thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=150&q=80",
-    notes: "Matte black smartphone floating with glowing kinetic subtitle overlays",
-    createdAt: "2025-03-01T10:00:00Z",
-  },
-];
+// No built-in stock references: each user adds their own.
+const DEFAULT_REFERENCES: VideoReference[] = [];
+const SEEDED_REFERENCE_IDS = new Set(["ref_pers_01", "ref_prod_01", "ref_loc_01", "ref_obj_01"]);
 
 export class AIVideoService {
   /**
@@ -235,8 +195,9 @@ export class AIVideoService {
    */
   getReferences(): VideoReference[] {
     const db = readDb();
-    if (!db.aiReferences || db.aiReferences.length === 0) {
-      db.aiReferences = DEFAULT_REFERENCES;
+    if (!db.aiReferences) db.aiReferences = [...DEFAULT_REFERENCES];
+    if (db.aiReferences.some((r: VideoReference) => SEEDED_REFERENCE_IDS.has(r.id))) {
+      db.aiReferences = db.aiReferences.filter((r: VideoReference) => !SEEDED_REFERENCE_IDS.has(r.id));
       writeDb(db);
     }
     return db.aiReferences;
@@ -552,9 +513,9 @@ Output strict JSON object matching:
       height = 1080;
     }
 
-    // Check if an existing source video exists to use as base, or generate from test sample
-    const sampleSourceVideo = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-    const hasSampleSource = fs.existsSync(sampleSourceVideo);
+    // No stock/sample footage: shots render as a plain preview card until a real video provider is connected.
+    const sampleSourceVideo = "";
+    const hasSampleSource = false;
 
     // Build FFmpeg command with fast video scaling and reframing
     let videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
@@ -825,45 +786,14 @@ Return JSON:
           outRenderPath,
         ]);
       } catch (err: any) {
-        console.warn("Concat demuxer failed, falling back to direct re-encode:", err.message);
-        // Fallback to sample video
-        const sampleSourceVideo = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-        await execFileAsync(ffmpegService.getFFmpegPath(), [
-          "-y",
-          "-i",
-          sampleSourceVideo,
-          "-t",
-          totalDuration.toFixed(2),
-          "-vf",
-          `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`,
-          "-c:v",
-          "libx264",
-          "-preset",
-          "ultrafast",
-          outRenderPath,
-        ]);
+        throw new Error(`Combining the shots failed: ${err.message}`);
       } finally {
         if (fs.existsSync(concatListFile)) {
           fs.unlinkSync(concatListFile);
         }
       }
     } else {
-      // Generate clean master from sample video
-      const sampleSourceVideo = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-      await execFileAsync(ffmpegService.getFFmpegPath(), [
-        "-y",
-        "-i",
-        sampleSourceVideo,
-        "-t",
-        totalDuration.toFixed(2),
-        "-vf",
-        `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        outRenderPath,
-      ]);
+      throw new Error("Render at least one shot before combining the storyboard.");
     }
 
     // Generate thumbnail
@@ -979,7 +909,12 @@ Return JSON:
         height = 1080;
       }
 
-      const sampleSource = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
+      // Use the user's own source video (a /storage/... URL); never a stock sample.
+      const rel = String(sourceVideoUrl || "").replace(/^\/storage\//, "");
+      const sampleSource = path.resolve(STORAGE_DIRS.root, rel);
+      if (!rel || !sampleSource.startsWith(STORAGE_DIRS.root) || !fs.existsSync(sampleSource)) {
+        throw new Error("Choose one of your own rendered or uploaded videos to turn into content.");
+      }
       try {
         await execFileAsync(ffmpegService.getFFmpegPath(), [
           "-y",
@@ -996,7 +931,7 @@ Return JSON:
           outRenderPath,
         ]);
       } catch (err: any) {
-        console.warn("Content variant render fallback:", err.message);
+        throw new Error(`Rendering the ${dest} version failed: ${err.message}`);
       }
 
       const videoUrl = `/storage/renders/${outFileName}`;
@@ -1015,7 +950,7 @@ Return JSON:
         userProductDetails: userProductDetails || {},
         safeAreaPreset: cfg.safeArea,
         videoUrl,
-        thumbnailUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80",
+        thumbnailUrl: "",
         status: "ready",
       });
     }

@@ -112,9 +112,9 @@ export const adsAndLiveService = {
     const db = readDb();
     return db.kickStreamConfig || {
       serverUrl: "rtmp://live.kick.com/app/",
-      streamKey: "sk_us-west_default_sample_key_masked",
-      channelName: "ClipFlowLive",
-      isConfigured: true,
+      streamKey: "",
+      channelName: "",
+      isConfigured: false,
       resolution: "1080p60",
       targetBitrateKbps: 6000,
     };
@@ -211,12 +211,12 @@ export const adsAndLiveService = {
     const db = readDb();
     return db.youtubeStreamConfig || {
       serverUrl: "rtmp://a.rtmp.youtube.com/live2",
-      streamKey: "yt_live_default_key_masked",
+      streamKey: "",
       broadcastTitle: "ClipFlow Live Stream Broadcast",
       privacy: "public",
       category: "Entertainment",
       latency: "low",
-      isConfigured: true,
+      isConfigured: false,
       resolution: "1080p60",
       targetBitrateKbps: 6800,
     };
@@ -311,10 +311,10 @@ export const adsAndLiveService = {
     const db = readDb();
     return db.instagramStreamConfig || {
       serverUrl: "rtmps://live-upload.instagram.com:443/rtmp/",
-      streamKey: "ig_live_producer_sample_key_masked",
+      streamKey: "",
       broadcastTitle: "Instagram Live via ClipFlow",
       verticalPreset: true,
-      isConfigured: true,
+      isConfigured: false,
       resolution: "1080x1920",
       targetBitrateKbps: 4500,
     };
@@ -446,9 +446,10 @@ export const adsAndLiveService = {
     const title = params.title || `Live Studio Recording - ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
     
     // Choose video URL (fallback to standard clip video if not uploading large payload)
-    const videoUrl = params.videoDataUrl && params.videoDataUrl.startsWith("http")
-      ? params.videoDataUrl
-      : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    if (!params.videoDataUrl || !/^(https?:|\/storage\/)/.test(params.videoDataUrl)) {
+      throw new Error("No recording was uploaded, so nothing was saved.");
+    }
+    const videoUrl = params.videoDataUrl;
 
     const newItem = {
       id: recId,
@@ -457,8 +458,8 @@ export const adsAndLiveService = {
       type: "video",
       url: videoUrl,
       sourceUrl: videoUrl,
-      thumbnail: params.thumbnailUrl || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-      thumbnailUrl: params.thumbnailUrl || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
+      thumbnail: params.thumbnailUrl || "",
+      thumbnailUrl: params.thumbnailUrl || "",
       duration,
       durationSec: duration,
       fileSize: `${(duration * 0.45).toFixed(1)} MB`,
@@ -584,34 +585,7 @@ export const adsAndLiveService = {
   // ----------------------------------------------------------------
   getTikTokAdAccounts() {
     const db = readDb();
-    if (!db.tiktokAdvertiserAccounts || db.tiktokAdvertiserAccounts.length === 0) {
-      db.tiktokAdvertiserAccounts = [
-        {
-          advertiserId: "ADV_TT_892104",
-          advertiserName: "ClipFlow Scale LLC (US Verified)",
-          currency: "USD",
-          timezone: "America/Los_Angeles",
-          status: "authorized",
-          balance: "$1,450.00",
-          pixelId: "PIX_TT_90124",
-          authorizedAt: "2026-03-01T12:00:00Z",
-          scopes: ["video.ad.upload", "ad.campaign.write", "ad.creative.manage"],
-        },
-        {
-          advertiserId: "ADV_TT_771209",
-          advertiserName: "Apex Media & Growth Studio",
-          currency: "USD",
-          timezone: "America/New_York",
-          status: "authorized",
-          balance: "$620.00",
-          pixelId: "PIX_TT_55412",
-          authorizedAt: "2026-03-10T15:30:00Z",
-          scopes: ["video.ad.upload", "ad.campaign.write"],
-        },
-      ];
-      writeDb(db);
-    }
-    return db.tiktokAdvertiserAccounts;
+    return db.tiktokAdvertiserAccounts || [];
   },
 
   connectTikTokAdAccount(accountData: {
@@ -706,34 +680,6 @@ export const adsAndLiveService = {
       } catch (e) {
         console.warn("Could not read renders dir:", e);
       }
-    }
-
-    // 2. Add sample high-retention master assets if list is small
-    if (finished.length === 0) {
-      finished.push(
-        {
-          id: "vid_demo_01",
-          title: "ClipFlow Master Hook (Vertical 9:16)",
-          url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-          duration: 15,
-          aspectRatio: "9:16",
-          resolution: "1080x1920",
-          fileSize: "5.2 MB",
-          source: "project",
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: "vid_demo_02",
-          title: "AI Viral Keynote Clip (9:16)",
-          url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-          duration: 22,
-          aspectRatio: "9:16",
-          resolution: "1080x1920",
-          fileSize: "7.1 MB",
-          source: "clip",
-          createdAt: new Date().toISOString(),
-        }
-      );
     }
 
     return finished;
@@ -1020,23 +966,9 @@ export const adsAndLiveService = {
   // ----------------------------------------------------------------
   // META ADS MANAGER INTEGRATION
   // ----------------------------------------------------------------
-  getMetaAdAccounts() {
-    return [
-      {
-        id: "act_819203914",
-        name: "ClipFlow Scale LLC (Meta Ad Account)",
-        currency: "USD",
-        status: "authorized" as const,
-        pages: [
-          { id: "page_10023", name: "ClipFlow Official Page" },
-          { id: "page_88192", name: "Alex Rivera Creator Studio" },
-        ],
-        instagramAccounts: [
-          { id: "ig_33190", username: "@clipflow.hq" },
-          { id: "ig_77218", username: "@alexrivera.film" },
-        ],
-      },
-    ];
+  getMetaAdAccounts(): any[] {
+    // No Meta Ads OAuth configured yet, so there are no connected ad accounts.
+    return [];
   },
 
   async uploadMetaAdCreative(params: {

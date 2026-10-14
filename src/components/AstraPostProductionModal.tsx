@@ -142,7 +142,7 @@ export const AstraPostProductionModal: React.FC<AstraPostProductionModalProps> =
   isOpen,
   onClose,
   activeProject,
-  videoSrc = "/sample-media/tokyo_neon.mp4",
+  videoSrc = "",
   aspectRatio = "9:16",
   onApplySettings,
   onOpenExportModal,

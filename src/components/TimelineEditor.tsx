@@ -289,6 +289,7 @@ export const SKIN_THEMES: Record<EditorSkin, SkinColors> = {
   },
 };
 
+// Empty bins: users import their own media (no sample files).
 export const NLE_PROJECT_FOLDERS = [
   {
     id: "01_RAW_FOOTAGE",
@@ -297,193 +298,39 @@ export const NLE_PROJECT_FOLDERS = [
       {
         id: "A_Camera",
         name: "A_Camera",
-        items: [
-          {
-            id: "raw_a_01",
-            name: "THE 60-DAY CREATOR TRAP - Master Hook.mp4",
-            title: "THE 60-DAY CREATOR TRAP - Master Hook.mp4",
-            duration: "00:42",
-            durationSec: 42,
-            type: "video" as const,
-            resolution: "4K UHD · 60fps",
-            url: "/sample-media/tokyo_neon.mp4",
-            thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80",
-            folderId: "01_RAW_FOOTAGE",
-            subfolderId: "A_Camera",
-          },
-          {
-            id: "raw_a_02",
-            name: "Alex_Studio_Monologue_Take1.mp4",
-            title: "Alex_Studio_Monologue_Take1.mp4",
-            duration: "01:15",
-            durationSec: 75,
-            type: "video" as const,
-            resolution: "4K UHD · 29.97fps",
-            url: "/sample-media/creator_trap.mp4",
-            thumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=300&q=80",
-            folderId: "01_RAW_FOOTAGE",
-            subfolderId: "A_Camera",
-          },
-        ],
+        items: [] as any[],
       },
       {
         id: "B_Camera",
         name: "B_Camera",
-        items: [
-          {
-            id: "raw_b_01",
-            name: "B_Cam_CloseUp_Reaction.mp4",
-            title: "B_Cam_CloseUp_Reaction.mp4",
-            duration: "00:35",
-            durationSec: 35,
-            type: "video" as const,
-            resolution: "1080p · 60fps",
-            url: "/sample-media/studio_camera.mp4",
-            thumbnail: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=300&q=80",
-            folderId: "01_RAW_FOOTAGE",
-            subfolderId: "B_Camera",
-          },
-          {
-            id: "raw_b_02",
-            name: "B_Cam_Overhead_Desk_Angle.mp4",
-            title: "B_Cam_Overhead_Desk_Angle.mp4",
-            duration: "00:50",
-            durationSec: 50,
-            type: "video" as const,
-            resolution: "1080p · 60fps",
-            url: "/sample-media/tokyo_neon.mp4",
-            thumbnail: "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=300&q=80",
-            folderId: "01_RAW_FOOTAGE",
-            subfolderId: "B_Camera",
-          },
-        ],
+        items: [] as any[],
       },
     ],
-    items: [],
+    items: [] as any[],
   },
   {
     id: "02_AUDIO",
     name: "02_AUDIO",
     subfolders: [],
-    items: [
-      {
-        id: "aud_01",
-        name: "Podcast_Host_Alex_Lavalier.wav",
-        title: "Podcast_Host_Alex_Lavalier.wav",
-        duration: "02:14",
-        durationSec: 134,
-        type: "audio" as const,
-        resolution: "48kHz · 24-bit",
-        url: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-        thumbnail: "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&w=300&q=80",
-        folderId: "02_AUDIO",
-      },
-      {
-        id: "aud_02",
-        name: "Guest_John_Rode_Mic.wav",
-        title: "Guest_John_Rode_Mic.wav",
-        duration: "02:14",
-        durationSec: 134,
-        type: "audio" as const,
-        resolution: "48kHz · 24-bit",
-        url: "https://actions.google.com/sounds/v1/science_fiction/scifi_hum.ogg",
-        thumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=300&q=80",
-        folderId: "02_AUDIO",
-      },
-    ],
+    items: [] as any[],
   },
   {
     id: "03_GFX",
     name: "03_GFX",
     subfolders: [],
-    items: [
-      {
-        id: "gfx_01",
-        name: "TitleCard_The60DayCreatorTrap.png",
-        title: "TitleCard_The60DayCreatorTrap.png",
-        duration: "00:05",
-        durationSec: 5,
-        type: "image" as const,
-        resolution: "3840×2160 Alpha",
-        url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=300&q=80",
-        thumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=300&q=80",
-        folderId: "03_GFX",
-      },
-      {
-        id: "gfx_02",
-        name: "LowerThird_Kinetic_Minimal.webm",
-        title: "LowerThird_Kinetic_Minimal.webm",
-        duration: "00:08",
-        durationSec: 8,
-        type: "broll" as const,
-        resolution: "4K Alpha Video",
-        url: "/sample-media/studio_camera.mp4",
-        thumbnail: "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=300&q=80",
-        folderId: "03_GFX",
-      },
-    ],
+    items: [] as any[],
   },
   {
     id: "04_MUSIC",
     name: "04_MUSIC",
     subfolders: [],
-    items: [
-      {
-        id: "mus_01",
-        name: "Night_City_Synthwave_Beat.mp3",
-        title: "Night_City_Synthwave_Beat.mp3",
-        duration: "02:30",
-        durationSec: 150,
-        type: "audio" as const,
-        resolution: "320kbps Stereo",
-        url: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-        thumbnail: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=300&q=80",
-        folderId: "04_MUSIC",
-      },
-      {
-        id: "mus_02",
-        name: "Dramatic_Bass_Drop_Impact.wav",
-        title: "Dramatic_Bass_Drop_Impact.wav",
-        duration: "00:12",
-        durationSec: 12,
-        type: "audio" as const,
-        resolution: "48kHz Stereo",
-        url: "https://actions.google.com/sounds/v1/science_fiction/scifi_hum.ogg",
-        thumbnail: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=300&q=80",
-        folderId: "04_MUSIC",
-      },
-    ],
+    items: [] as any[],
   },
   {
     id: "05_STOCK",
     name: "05_STOCK",
     subfolders: [],
-    items: [
-      {
-        id: "stk_01",
-        name: "Tokyo_Neon_Night_Broll.mp4",
-        title: "Tokyo_Neon_Night_Broll.mp4",
-        duration: "00:18",
-        durationSec: 18,
-        type: "video" as const,
-        resolution: "4K UHD · 30fps",
-        url: "/sample-media/tokyo_neon.mp4",
-        thumbnail: "https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=300&q=80",
-        folderId: "05_STOCK",
-      },
-      {
-        id: "stk_02",
-        name: "Studio_Camera_Focus_Pull.mp4",
-        title: "Studio_Camera_Focus_Pull.mp4",
-        duration: "00:15",
-        durationSec: 15,
-        type: "video" as const,
-        resolution: "4K UHD · 60fps",
-        url: "/sample-media/studio_camera.mp4",
-        thumbnail: "https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&w=300&q=80",
-        folderId: "05_STOCK",
-      },
-    ],
+    items: [] as any[],
   },
 ];
 
@@ -906,7 +753,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     durationSec: 42,
     type: "video",
     resolution: "4K UHD · 60fps",
-    url: "/sample-media/tokyo_neon.mp4",
+    url: "",
     thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80",
     folderPath: "01_RAW FOOTAGE/A_Camera",
   });
@@ -1719,12 +1566,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([
     {
       id: "asset_01",
-      title: activeProject?.name ? `${activeProject.name.slice(0, 18)}.mp4` : "Alex_A_Roll.mp4",
+      title: activeProject?.name ? `${activeProject.name.slice(0, 18)}.mp4` : "Untitled.mp4",
       duration: "18s",
       durationSec: 18,
       type: "video",
       img: activeProject?.sourceThumbnail || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: activeProject?.sourceVideoUrl || "/sample-media/tokyo_neon.mp4",
+      sourceUrl: activeProject?.sourceVideoUrl || "",
     },
     {
       id: "asset_02",
@@ -1733,7 +1580,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       durationSec: 12,
       type: "broll",
       img: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: "/sample-media/studio_camera.mp4",
+      sourceUrl: "",
     },
     {
       id: "asset_03",
@@ -1742,7 +1589,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       durationSec: 8,
       type: "video",
       img: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: "/sample-media/tokyo_neon.mp4",
+      sourceUrl: "",
     },
     {
       id: "asset_04",
@@ -6525,7 +6372,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                                 durationSec: 10,
                                 type: "broll",
                                 img: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=300&q=80",
-                                sourceUrl: "/sample-media/studio_camera.mp4",
+                                sourceUrl: "",
                               };
                               setProjectAssets((prev) => [newBroll, ...prev]);
                               handleInsertAssetToTimeline(newBroll);
@@ -8198,7 +8045,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                           console.info("[TimelineEditor] Switching to verified local video asset fallback");
                           setPreviewMediaError(null);
                           if (videoRef.current) {
-                            videoRef.current.src = "/sample-media/tokyo_neon.mp4";
+                            videoRef.current.src = "";
                             videoRef.current.load();
                             videoRef.current.play().catch(() => {});
                           }
@@ -12074,7 +11921,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_host", "Cam 1: Alex (Host)", "/storage/uploads/sample_test.mp4")}
+                  onClick={() => handleSwitchCutAngle("cam_host", "Cam 1: Host", activeProject?.sourceVideoUrl || "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-[#16D9F5]" />
@@ -12082,7 +11929,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_guest", "Cam 2: John Knox", "/sample-media/studio_camera.mp4")}
+                  onClick={() => handleSwitchCutAngle("cam_guest", "Cam 2: John Knox", "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
@@ -12090,7 +11937,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_guest_2", "Cam 3: Sarah Lin", "/sample-media/creator_trap.mp4")}
+                  onClick={() => handleSwitchCutAngle("cam_guest_2", "Cam 3: Sarah Lin", "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
@@ -12098,7 +11945,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_split", "Dual Split", "/sample-media/tokyo_neon.mp4")}
+                  onClick={() => handleSwitchCutAngle("cam_split", "Dual Split", "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />

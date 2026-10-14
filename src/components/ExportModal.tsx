@@ -280,6 +280,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         clearInterval(progressTimer);
         const data = await response.json();
 
+        if (!data.success || !data.renderUrl) {
+          throw new Error(data.error || "The server couldn't render this video.");
+        }
         if (data.success && data.renderUrl) {
           completed = true;
           setRenderProgress(100);
@@ -293,29 +296,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             setDownloadFilename(data.filename || "ClipFlow_Master_916.mp4");
           }
         }
-      } catch (err: any) {
-        console.warn("Server FFmpeg endpoint unavailable, completing with client preview export:", err);
       } finally {
         clearInterval(progressTimer);
       }
-
-      // If server render did not produce a URL, complete export browser-side with preview export
-      if (!completed) {
-        setRenderProgress(100);
-        const effectiveExportUrl = sourceUrl || activeClip?.videoUrl || "/sample-media/tokyo_neon.mp4";
-        const cleanName = (projectName || "ClipFlow_Project").replace(/[^a-zA-Z0-9_-]/g, "_");
-        const exportFilename = isTest ? `${cleanName}_Test_5s_Preview.mp4` : `${cleanName}_Master_Preview.mp4`;
-
-        if (isTest) {
-          setCurrentStepText("5s Test render complete! (Preview export note: generated from source clip)");
-          setTestRenderUrl(effectiveExportUrl);
-          setTestRenderFilename(exportFilename);
-        } else {
-          setCurrentStepText("Render complete! (Preview export ready • Download master clip below)");
-          setDownloadUrl(effectiveExportUrl);
-          setDownloadFilename(exportFilename);
-        }
-      }
+      // Never pretend an export succeeded: errors from the server are shown as-is.
+      if (!completed) throw new Error("Export failed.");
     } catch (err: any) {
       console.error("Render error:", err);
       setErrorMessage(err.message || "Failed to render video");

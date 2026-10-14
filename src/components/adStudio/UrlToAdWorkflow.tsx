@@ -53,7 +53,7 @@ export const UrlToAdWorkflow: React.FC<UrlToAdWorkflowProps> = ({
   ]);
 
   // Selected ClipFlow library media to blend with
-  const [selectedClipFlowVideo, setSelectedClipFlowVideo] = useState(projects[0]?.sourceVideoUrl || "/sample-media/tokyo_neon.mp4");
+  const [selectedClipFlowVideo, setSelectedClipFlowVideo] = useState(projects[0]?.sourceVideoUrl || "");
 
   // Generated Hooks
   const [selectedHookIndex, setSelectedHookIndex] = useState(0);

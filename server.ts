@@ -19,6 +19,7 @@ import { authService } from "./server/auth";
 import { storageService } from "./server/r2";
 import {
   createCheckoutSession,
+  createCreditPackCheckoutSession,
   verifyStripeWebhook,
   processStripeWebhookEvent,
   generateTestWebhookSignature,
@@ -42,7 +43,7 @@ dotenv.config();
 const execFileAsync = promisify(execFile);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Initialize physical storage
 initStorage();
@@ -269,62 +270,7 @@ const upload = multer({
   },
 });
 
-// Seed an initial demo video if uploads folder is empty
-async function seedDemoVideoIfEmpty() {
-  const samplePath = path.join(STORAGE_DIRS.uploads, "sample_test.mp4");
-  if (!fs.existsSync(samplePath)) {
-    try {
-      await execFileAsync(ffmpegService.getFFmpegPath(), [
-        "-y",
-        "-f", "lavfi", "-i", "testsrc=duration=20:size=1280x720:rate=30",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=20",
-        "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
-        samplePath
-      ]);
-    } catch (e) {
-      console.warn("Could not generate sample video:", e);
-    }
-  }
-
-  const db = readDb();
-  if (db.projects.length === 0 && fs.existsSync(samplePath)) {
-    const demoProjectId = "proj_demo_keynote";
-    const demoJobId = "job_demo_keynote";
-
-    db.projects.push({
-      id: demoProjectId,
-      name: "The Future of AI & Creator Economy (Ep. 42)",
-      type: "clipper",
-      status: "processing",
-      duration: 20,
-      aspectRatio: "9:16",
-      sourceVideoUrl: "/storage/uploads/sample_test.mp4",
-      sourceThumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      clipsCount: 0,
-      approvedClipsCount: 0,
-    });
-
-    db.jobs.push({
-      id: demoJobId,
-      projectId: demoProjectId,
-      status: "uploaded",
-      progress: 0,
-      currentStep: "Initialized",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      inputVideoPath: samplePath,
-    });
-
-    writeDb(db);
-
-    // Run pipeline asynchronously for demo video
-    pipelineManager.startIngestPipeline(demoJobId, demoProjectId, samplePath, getGenAI()).catch(console.error);
-  }
-}
-
-seedDemoVideoIfEmpty().catch(console.error);
+// No demo video/project seeding: every project belongs to a real signed-in user.
 
 // ----------------------------------------------------
 // AUTHENTICATION & MULTI-TENANT AUTHORIZATION MIDDLEWARE
@@ -346,16 +292,71 @@ async function authenticateUser(req: any, res: any, next: any) {
       }
     }
 
-    // Default to seeded creator profile for guest / preview convenience
-    req.user = authService.seedInitialUserIfEmpty();
+    // No guest/demo fallback user: signed-out requests stay anonymous.
+    req.user = undefined;
+    req.isAuthenticated = false;
     next();
   } catch (err) {
-    req.user = authService.seedInitialUserIfEmpty();
+    req.user = undefined;
+    req.isAuthenticated = false;
     next();
   }
 }
 
 app.use(authenticateUser);
+
+// Every /api route needs a signed-in user except these public ones
+// (auth, public pricing, webhooks, OAuth callbacks, media files, podcast guest links).
+const PUBLIC_API_PATTERNS: RegExp[] = [
+  /^\/api\/auth\/(login|signup|logout)$/,
+  /^\/api\/health$/,
+  /^\/api\/billing\/(plans|credit-packs|webhook)$/,
+  /^\/api\/oauth\/google\/callback$/,
+  /^\/api\/integrations\/google\/calendar\/webhook$/,
+  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks|status))?$/,
+];
+function isPublicApiRequest(req: any): boolean {
+  const p = req.path || "";
+  if (req.method === "GET" && (p.startsWith("/api/media/") || p === "/api/media/stream") && p !== "/api/media/") {
+    return true; // media file streaming used by <video>/<img> tags
+  }
+  return PUBLIC_API_PATTERNS.some((re) => re.test(p));
+}
+app.use("/api", (req: any, res: any, next: any) => {
+  if (req.isAuthenticated || isPublicApiRequest({ method: req.method, path: req.originalUrl.split("?")[0] })) return next();
+  return res.status(401).json({ success: false, error: "Please sign in to continue.", authRequired: true });
+});
+
+// Features that are still simulated on the server (no real RTMP streaming, no real ad-platform
+// or social OAuth). They answer honestly with 501 instead of pretending to work.
+const NOT_YET_AVAILABLE: Array<{ re: RegExp; msg: string }> = [
+  { re: /^\/api\/live\/(kick|youtube|instagram|tiktok)\/start$/, msg: "Live streaming isn't available yet." },
+  { re: /^\/api\/ads\/(tiktok|meta)\/upload-creative$/, msg: "Ad uploads need TikTok/Meta Ads OAuth, which isn't set up yet." },
+  { re: /^\/api\/ads\/tiktok\/(connect-account|retry-job)$/, msg: "Connecting TikTok Ads needs its OAuth app, which isn't set up yet." },
+  { re: /^\/api\/ads\/tiktok\/finished-videos$/, msg: "Ad uploads aren't available yet." },
+  { re: /^\/api\/podcast\/sessions\/[^/]+\/finalize$/, msg: "Podcast recording export isn't available yet." },
+  { re: /^\/api\/automations\/pipeline\/(test-run|trigger-now|runs\/[^/]+\/retry-step)$/, msg: "Automated pipeline runs need connected video sources and social accounts, which aren't set up yet." },
+];
+app.use("/api", (req: any, res: any, next: any) => {
+  const p = req.originalUrl.split("?")[0];
+  const hit = NOT_YET_AVAILABLE.find((n) => n.re.test(p));
+  if (hit) return res.status(501).json({ success: false, notConfigured: true, error: hit.msg });
+  next();
+});
+
+// Ownership helpers for per-user data
+function currentUserId(req: any): string {
+  return String(req.user?.id || "");
+}
+function ownedBy(req: any) {
+  const uid = currentUserId(req);
+  return (item: any) => !!item && item.userId === uid;
+}
+
+// Billing workspace for this request: each signed-in user has their own balance.
+function billingWorkspaceId(req: any): string {
+  return String(req.user?.id || "");
+}
 
 // ----------------------------------------------------
 // ADMIN ACCESS CONTROL
@@ -380,7 +381,7 @@ function requireAdmin(req: any, res: any, next: any) {
   res.status(403).json({ success: false, error: "Forbidden: admin access required." });
 }
 
-app.use(["/api/admin", "/api/system-readiness", "/api/system/e2e-sample-test", "/api/tests"], requireAdmin);
+app.use(["/api/admin", "/api/system-readiness", "/api/system/e2e-sample-test", "/api/tests", "/api/billing/upgrade-plan", "/api/billing/test-simulate-webhook", "/api/automations/pipeline/alerts/simulate", "/api/affiliate"], requireAdmin);
 
 // Minimal public render-engine check (used by the export modal for all users)
 app.get("/api/render-status", async (req, res) => {
@@ -513,7 +514,7 @@ app.post("/api/podcast/sessions", (req: any, res) => {
     const { title, quality, audioFormat } = req.body;
     const session = podcastService.createSession({
       title: title || "Studio Interview Episode",
-      hostId: req.user?.id || "user_creator_default",
+      hostId: currentUserId(req),
       hostName: req.user?.name || "Host",
       quality: quality || "1080p",
       audioFormat: audioFormat || "wav_uncompressed",
@@ -889,7 +890,7 @@ app.post(
       return res.status(400).json({ success: false, error: "No media files provided." });
     }
 
-    const userId = req.user?.id || "usr_default_creator";
+    const userId = currentUserId(req);
     const createdProjects: any[] = [];
     const createdJobs: any[] = [];
     const createdMediaItems: any[] = [];
@@ -980,6 +981,7 @@ app.post(
 
     db.projects.unshift(...createdProjects);
     db.jobs.unshift(...createdJobs);
+    createdMediaItems.forEach((m: any) => (m.userId = currentUserId(req)));
     db.media.unshift(...createdMediaItems);
     writeDb(db);
 
@@ -1001,13 +1003,13 @@ app.post(
 // Media Vault Library Management APIs
 app.get("/api/media", (req: any, res) => {
   const db = readDb();
-  res.json({ success: true, media: db.media || [] });
+  res.json({ success: true, media: (db.media || []).filter(ownedBy(req)) });
 });
 
 app.delete("/api/media/:id", (req: any, res) => {
   const db = readDb();
   if (db.media) {
-    db.media = db.media.filter((m: any) => m.id !== req.params.id);
+    db.media = db.media.filter((m: any) => !(m.id === req.params.id && m.userId === currentUserId(req)));
     writeDb(db);
   }
   res.json({ success: true, message: "Media deleted" });
@@ -1019,7 +1021,7 @@ app.patch("/api/media/:id", (req: any, res) => {
   const updates = req.body;
   const db = readDb();
   if (db.media) {
-    const itemIndex = db.media.findIndex((m: any) => m.id === id);
+    const itemIndex = db.media.findIndex((m: any) => m.id === id && m.userId === currentUserId(req));
     if (itemIndex !== -1) {
       db.media[itemIndex] = {
         ...db.media[itemIndex],
@@ -1081,7 +1083,7 @@ app.get("/api/jobs/:id", (req: any, res) => {
   }
 
   // Tenant authorization check
-  if (job.userId && req.user?.id && job.userId !== req.user.id) {
+  if (job.userId !== req.user?.id) {
     return res.status(403).json({ success: false, error: "Unauthorized access to job" });
   }
 
@@ -1104,7 +1106,7 @@ app.post("/api/jobs/:id/retry", async (req: any, res) => {
     return res.status(404).json({ success: false, error: "Job not found" });
   }
 
-  if (job.userId && req.user?.id && job.userId !== req.user.id) {
+  if (job.userId !== req.user?.id) {
     return res.status(403).json({ success: false, error: "Unauthorized" });
   }
 
@@ -1125,15 +1127,13 @@ app.get("/api/projects", (req: any, res) => {
   const db = readDb();
   const userId = req.user?.id;
   // Return projects owned by this user or projects created in demo/preview
-  const userProjects = (db.projects || []).filter(
-    (p: any) => !p.userId || !userId || p.userId === userId
-  );
+  const userProjects = (db.projects || []).filter((p: any) => userId && p.userId === userId);
   res.json({ success: true, projects: userProjects });
 });
 
 app.get("/api/clips", (req: any, res) => {
   const db = readDb();
-  const allClips = (db.projects || []).flatMap((p: any) => p.clips || []);
+  const allClips = (db.projects || []).filter(ownedBy(req)).flatMap((p: any) => p.clips || []);
   res.json({ success: true, clips: allClips });
 });
 
@@ -1144,7 +1144,7 @@ app.get("/api/projects/:id", (req: any, res) => {
     return res.status(404).json({ success: false, error: "Project not found" });
   }
 
-  if (project.userId && req.user?.id && project.userId !== req.user.id) {
+  if (project.userId !== req.user?.id) {
     return res.status(403).json({ success: false, error: "Unauthorized access to project" });
   }
 
@@ -1160,7 +1160,7 @@ app.put("/api/projects/:id", (req: any, res) => {
   }
 
   const existing = db.projects[projectIdx];
-  if (existing.userId && req.user?.id && existing.userId !== req.user.id) {
+  if (existing.userId !== req.user?.id) {
     return res.status(403).json({ success: false, error: "Unauthorized access to project" });
   }
 
@@ -1185,7 +1185,7 @@ app.post("/api/projects/:id/clips/:clipId/captions", (req: any, res) => {
   const project = db.projects.find((p: any) => p.id === req.params.id);
   if (!project) return res.status(404).json({ success: false, error: "Project not found" });
 
-  if (project.userId && req.user?.id && project.userId !== req.user.id) {
+  if (project.userId !== req.user?.id) {
     return res.status(403).json({ success: false, error: "Unauthorized" });
   }
 
@@ -1206,7 +1206,9 @@ app.post("/api/render-clip", async (req: any, res) => {
       return res.status(400).json({ success: false, error: "clipId and projectId are required" });
     }
 
-    const userId = req.user?.id || "usr_default_creator";
+    const userId = currentUserId(req);
+    const owned = (readDb().projects || []).find((p: any) => p.id === projectId && p.userId === userId);
+    if (!owned) return res.status(404).json({ success: false, error: "Project not found" });
     const result = await pipelineManager.renderFinalVideo(
       clipId,
       projectId,
@@ -1230,18 +1232,23 @@ app.post("/api/render-clip", async (req: any, res) => {
 // 7b. Server-Side Batch Render Endpoint (Processes multiple clips with unified Brand Kit)
 app.post("/api/batch-render-clips", async (req: any, res) => {
   try {
-    const { clips, projectId = "proj_demo_keynote", brandKit, options } = req.body;
+    const { clips, projectId, brandKit, options } = req.body;
+    const ownsProject = (readDb().projects || []).some((p: any) => p.id === projectId && p.userId === currentUserId(req));
+    if (!projectId || !ownsProject) {
+      return res.status(404).json({ success: false, error: "Project not found" });
+    }
     if (!Array.isArray(clips) || clips.length === 0) {
       return res.status(400).json({ success: false, error: "An array of clips is required for batch export." });
     }
 
-    const userId = req.user?.id || "usr_default_creator";
+    const userId = currentUserId(req);
     const results: Array<{
       clipId: string;
       title: string;
       success: boolean;
-      renderUrl: string;
-      filename: string;
+      renderUrl?: string;
+      filename?: string;
+      error?: string;
       duration?: number;
     }> = [];
 
@@ -1273,15 +1280,12 @@ app.post("/api/batch-render-clips", async (req: any, res) => {
         });
       } catch (renderErr: any) {
         console.warn(`[Batch Render] FFmpeg fallback for clip ${clipId}:`, renderErr.message);
-        // Fallback: provide valid streaming video asset so batch export completes successfully
-        const fallbackFilename = `ClipFlow_Batch_${clipId}_${Date.now()}.mp4`;
+        // Report the real failure instead of substituting a stock video.
         results.push({
           clipId,
           title,
-          success: true,
-          renderUrl: clipItem.videoUrl || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-          filename: fallbackFilename,
-          duration: clipItem.duration || 15,
+          success: false,
+          error: renderErr.message || "Render failed",
         });
       }
     }
@@ -1299,15 +1303,17 @@ app.post("/api/batch-render-clips", async (req: any, res) => {
 });
 
 // 8. Brand Kits API
-app.get("/api/brand-kits", (req, res) => {
+app.get("/api/brand-kits", (req: any, res) => {
   const db = readDb();
-  res.json({ success: true, brandKits: db.brandKits });
+  res.json({ success: true, brandKits: (db.brandKits || []).filter(ownedBy(req)) });
 });
 
-app.post("/api/brand-kits", (req, res) => {
+app.post("/api/brand-kits", (req: any, res) => {
   const db = readDb();
+  if (!db.brandKits) db.brandKits = [];
   const newKit = {
     id: `brand_${Date.now()}`,
+    userId: currentUserId(req),
     name: req.body.name || "ClipFlow Brand Kit",
     isDefault: false,
     logoUrl: req.body.logoUrl || "",
@@ -1336,11 +1342,11 @@ app.post("/api/brand-kits", (req, res) => {
   res.json({ success: true, brandKit: newKit });
 });
 
-app.put("/api/brand-kits/:id", (req, res) => {
+app.put("/api/brand-kits/:id", (req: any, res) => {
   const db = readDb();
-  const kitIndex = db.brandKits.findIndex((k: any) => k.id === req.params.id);
+  const kitIndex = (db.brandKits || []).findIndex((k: any) => k.id === req.params.id && k.userId === currentUserId(req));
   if (kitIndex !== -1) {
-    db.brandKits[kitIndex] = { ...db.brandKits[kitIndex], ...req.body };
+    db.brandKits[kitIndex] = { ...db.brandKits[kitIndex], ...req.body, userId: currentUserId(req) };
     writeDb(db);
     res.json({ success: true, brandKit: db.brandKits[kitIndex] });
   } else {
@@ -1349,15 +1355,15 @@ app.put("/api/brand-kits/:id", (req, res) => {
 });
 
 // 9. Social Accounts & Posts API
-app.get("/api/social-accounts", (req, res) => {
+app.get("/api/social-accounts", (req: any, res) => {
   const db = readDb();
-  res.json({ success: true, accounts: db.socialAccounts });
+  res.json({ success: true, accounts: (db.socialAccounts || []).filter(ownedBy(req)) });
 });
 
 // Scheduled Posts CRUD Endpoints (Persistent backend synchronization)
 app.get("/api/posts", (req, res) => {
   const db = readDb();
-  res.json({ success: true, posts: db.scheduledPosts || [] });
+  res.json({ success: true, posts: (db.scheduledPosts || []).filter(ownedBy(req)) });
 });
 
 app.post("/api/posts", async (req: any, res) => {
@@ -1365,6 +1371,7 @@ app.post("/api/posts", async (req: any, res) => {
   if (!db.scheduledPosts) db.scheduledPosts = [];
   const newPost = {
     id: req.body.id || `post_${Date.now()}`,
+    userId: currentUserId(req),
     clipId: req.body.clipId || `clip_${Date.now()}`,
     title: req.body.title || "Untitled Post",
     caption: req.body.caption || "",
@@ -1398,16 +1405,20 @@ app.post("/api/posts", async (req: any, res) => {
 app.put("/api/posts/:id", async (req: any, res) => {
   const db = readDb();
   if (!db.scheduledPosts) db.scheduledPosts = [];
-  const idx = db.scheduledPosts.findIndex((p: any) => p.id === req.params.id);
+  const anyIdx = db.scheduledPosts.findIndex((p: any) => p.id === req.params.id);
+  if (anyIdx !== -1 && db.scheduledPosts[anyIdx].userId !== currentUserId(req)) {
+    return res.status(404).json({ success: false, error: "Post not found" });
+  }
+  const idx = anyIdx;
   let updatedPost: any;
   if (idx === -1) {
     // If not found, insert
-    const created = { ...req.body, id: req.params.id };
+    const created = { ...req.body, id: req.params.id, userId: currentUserId(req) };
     db.scheduledPosts.push(created);
     writeDb(db);
     updatedPost = created;
   } else {
-    db.scheduledPosts[idx] = { ...db.scheduledPosts[idx], ...req.body };
+    db.scheduledPosts[idx] = { ...db.scheduledPosts[idx], ...req.body, userId: currentUserId(req) };
     writeDb(db);
     updatedPost = db.scheduledPosts[idx];
   }
@@ -1432,7 +1443,7 @@ app.put("/api/posts/:id", async (req: any, res) => {
 app.delete("/api/posts/:id", async (req: any, res) => {
   const db = readDb();
   if (!db.scheduledPosts) db.scheduledPosts = [];
-  db.scheduledPosts = db.scheduledPosts.filter((p: any) => p.id !== req.params.id);
+  db.scheduledPosts = db.scheduledPosts.filter((p: any) => !(p.id === req.params.id && p.userId === currentUserId(req)));
   writeDb(db);
 
   // If user has connected Google Calendar, remove the linked item from Google Calendar
@@ -1447,74 +1458,30 @@ app.delete("/api/posts/:id", async (req: any, res) => {
 
 // Social Direct Publish Endpoint
 app.post("/api/social/publish-direct", async (req: any, res) => {
-  try {
-    const { postId, platforms, title, caption, videoUrl } = req.body;
-    const timestamp = new Date().toISOString();
-    const publishedIds = (platforms || ["youtube"]).map(
-      (p: string) => `${p}_pub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
-    );
-
-    // Update status in db if present
-    const db = readDb();
-    if (db.scheduledPosts) {
-      const pIdx = db.scheduledPosts.findIndex((p: any) => p.id === postId);
-      if (pIdx !== -1) {
-        db.scheduledPosts[pIdx].status = "published";
-        db.scheduledPosts[pIdx].publishedPostId = publishedIds[0];
-        if (!db.scheduledPosts[pIdx].publishLogs) db.scheduledPosts[pIdx].publishLogs = [];
-        db.scheduledPosts[pIdx].publishLogs.push({
-          timestamp,
-          message: `Published to ${platforms?.join(", ")}`,
-        });
-        writeDb(db);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: "Post successfully dispatched to target platform publishers.",
-      publishedIds,
-      publishedAt: timestamp,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || "Failed to publish post" });
-  }
+  // Direct publishing needs real platform OAuth apps (YouTube/TikTok/Instagram/LinkedIn).
+  // Until those are configured we report it honestly instead of faking a published post.
+  res.status(501).json({
+    success: false,
+    notConfigured: true,
+    error: "Direct publishing isn't available yet. Connect a real social account (requires platform OAuth setup) to publish.",
+  });
 });
 
-app.post("/api/social-accounts/connect", (req, res) => {
-  const db = readDb();
-  const { platform, handle, name } = req.body;
-  const existing = db.socialAccounts.find((a: any) => a.platform === platform);
-  if (existing) {
-    existing.status = "connected";
-    existing.connectedAt = new Date().toISOString();
-    if (handle) existing.handle = handle;
-    if (name) existing.name = name;
-    writeDb(db);
-    res.json({ success: true, account: existing });
-  } else {
-    const newAcc = {
-      id: `acc_${platform}_${Date.now()}`,
-      platform,
-      name: name || `${platform.toUpperCase()} Creator Account`,
-      handle: handle || `@creator_${platform}`,
-      avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80",
-      status: "connected",
-      connectedAt: new Date().toISOString(),
-      scopes: ["content.upload", "profile.read"],
-      autoPublishEnabled: true,
-      subscribers: "10.5K",
-    };
-    db.socialAccounts.push(newAcc);
-    writeDb(db);
-    res.json({ success: true, account: newAcc });
-  }
+app.post("/api/social-accounts/connect", (req: any, res) => {
+  // Social accounts must be connected through each platform's real OAuth flow.
+  // No OAuth apps are configured yet, so we never create a fake "connected" account.
+  const { platform } = req.body || {};
+  res.status(501).json({
+    success: false,
+    notConfigured: true,
+    error: `Connecting ${platform || "this platform"} requires its OAuth app credentials, which aren't set up yet.`,
+  });
 });
 
 // 10. Automations API & Self-Service Autonomous Pipeline
 app.get("/api/automations", (req, res) => {
   const db = readDb();
-  res.json({ success: true, automations: db.automations });
+  res.json({ success: true, automations: (db.automations || []).filter(ownedBy(req)) });
 });
 
 app.get("/api/automations/pipeline", (req, res) => {
@@ -1805,6 +1772,7 @@ Return strict JSON object matching:
     // AI Credit Metering: 2 credits for social copy generation
     try {
       const creditRes = billingService.reserveUsage({
+        workspaceId: billingWorkspaceId(req),
         operationType: "ai_generation",
         estimatedQuantity: 2,
         unit: "credits",
@@ -1881,13 +1849,14 @@ Do not add pleasantries, timestamps, speaker labels, or quotes. Output ONLY the 
 });
 
 // 12. AI Video Script & Scene Generation
-app.post("/api/ai/generate-video-script", async (req, res) => {
+app.post("/api/ai/generate-video-script", async (req: any, res) => {
   try {
-    const { prompt, targetDuration = 30, aspectRatio = "9:16", tone = "Energetic, direct, high-value, zero-fluff" } = req.body;
+    const { prompt, targetDuration: rawTargetDuration, aspectRatio = "9:16", tone = "Energetic, direct, high-value, zero-fluff" } = req.body;
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       return res.status(400).json({ success: false, error: "A prompt describing your video concept is required." });
     }
+    const targetDuration = parseSeconds(rawTargetDuration, 30);
 
     const ai = getGenAI();
     let scriptResult: any = null;
@@ -1957,136 +1926,19 @@ Return a JSON object with this exact structure:
       }
     }
 
-    // High quality programmatic fallback strictly derived from the user's prompt concept
+    // No canned fallback: report a real error when AI generation isn't available or fails.
     if (!scriptResult || !Array.isArray(scriptResult.scenes) || scriptResult.scenes.length === 0) {
-      const cleanPrompt = prompt.trim();
-      const words = cleanPrompt.replace(/[^\w\s-]/g, "").split(/\s+/).filter(Boolean);
-      const subject = words.slice(0, 4).join(" ") || "Your Concept";
-      const title = cleanPrompt.length > 40 ? `${cleanPrompt.slice(0, 37)}...` : cleanPrompt;
-
-      // Calculate 5 balanced scene durations that sum exactly to targetDuration
-      const baseSceneDur = Math.floor(targetDuration / 5);
-      const remainderDur = targetDuration % 5;
-      const fallbackDurations = [
-        baseSceneDur,
-        baseSceneDur,
-        baseSceneDur,
-        baseSceneDur,
-        baseSceneDur + remainderDur,
-      ];
-      
-      const stockMediaPresets = [
-        "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-        "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80",
-        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80",
-        "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=600&q=80",
-        "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=600&q=80"
-      ];
-
-      scriptResult = {
-        title,
-        targetDuration,
-        aspectRatio,
-        hook: `Watch this before you try ${cleanPrompt}.`,
-        narrativeArc: "Hook → Problem → Solution → Benefit → Direct CTA",
-        soundtrackSuggestion: "High-Energy Kinetic Pulse (128 BPM)",
-        captionStyle: "Hormozi Kinetic Yellow",
-        scenes: [
-          {
-            sceneNumber: 1,
-            name: "1. The Hook",
-            duration: fallbackDurations[0],
-            voiceover: `Watch this before you try ${cleanPrompt}.`,
-            onScreenText: `DISCOVER ${subject.toUpperCase()}`,
-            visualDescription: `Striking visual establishing shot highlighting ${cleanPrompt} in sharp high definition with dramatic lighting.`,
-            suggestedStockKeywords: [words[0] || "cinematic", words[1] || "detail", "focus"],
-            cameraMotion: "Fast zoom to center",
-            audioMood: "Low tension heartbeat drop",
-            transition: "Glitch Cut",
-            mediaUrl: "/storage/uploads/sample_test.mp4",
-            mediaType: "video",
-          },
-          {
-            sceneNumber: 2,
-            name: "2. The Challenge",
-            duration: fallbackDurations[1],
-            voiceover: `Most people get ${cleanPrompt} completely wrong from the very start.`,
-            onScreenText: "AVOID THIS MISTAKE",
-            visualDescription: `Close-up diagnostic framing breaking down the common pitfall with ${cleanPrompt}.`,
-            suggestedStockKeywords: [words[0] || "challenge", "analysis", "close-up"],
-            cameraMotion: "Smooth pan left to right",
-            audioMood: "Rising cinematic synth tension",
-            transition: "Smooth Slide Left",
-            mediaUrl: "/storage/uploads/sample_test.mp4",
-            mediaType: "video",
-          },
-          {
-            sceneNumber: 3,
-            name: "3. The Breakthrough",
-            duration: fallbackDurations[2],
-            voiceover: `Here is the simple, proven technique that changes everything about ${cleanPrompt}.`,
-            onScreenText: "THE PRO TECHNIQUE",
-            visualDescription: `Dynamic demonstration showing step-by-step execution and precision craft of ${cleanPrompt}.`,
-            suggestedStockKeywords: [words[0] || "technique", "precision", "craft"],
-            cameraMotion: "Macro pan across key details",
-            audioMood: "Uplifting future bass drop",
-            transition: "Zoom Blur",
-            mediaUrl: "/storage/uploads/sample_test.mp4",
-            mediaType: "video",
-          },
-          {
-            sceneNumber: 4,
-            name: "4. The Result",
-            duration: fallbackDurations[3],
-            voiceover: `Once you apply this, your results with ${cleanPrompt} will be effortless and consistent.`,
-            onScreenText: "EFFORTLESS RESULTS",
-            visualDescription: `Smooth follow shot capturing flawless execution and momentum of ${cleanPrompt}.`,
-            suggestedStockKeywords: [words[0] || "success", "motion", "energy"],
-            cameraMotion: "Dynamic push in with slight rotation",
-            audioMood: "High energy rhythmic groove",
-            transition: "Cross Dissolve",
-            mediaUrl: "/storage/uploads/sample_test.mp4",
-            mediaType: "video",
-          },
-          {
-            sceneNumber: 5,
-            name: "5. The Call to Action",
-            duration: fallbackDurations[4],
-            voiceover: `Save this fold right now and test it before your next project!`,
-            onScreenText: "SAVE & TRY TODAY →",
-            visualDescription: `Engaging creator signoff framing ${cleanPrompt} with an inviting call to action overlay.`,
-            suggestedStockKeywords: [words[0] || "action", "finish", "creator"],
-            cameraMotion: "Slow pull back",
-            audioMood: "Clean lingering resolve chord",
-            transition: "Fade to Black",
-            mediaUrl: "/storage/uploads/sample_test.mp4",
-            mediaType: "video",
-          },
-        ],
-      };
+      return res.status(ai ? 502 : 503).json({
+        success: false,
+        error: ai
+          ? "The AI couldn't generate a script for that prompt. Please try again."
+          : "AI generation isn't available right now (GEMINI_API_KEY is not set).",
+      });
     }
 
-    // Strictly adjust scene durations to match targetDuration exactly
-    const count = scriptResult.scenes.length;
-    const curTotal = scriptResult.scenes.reduce((sum: number, s: any) => sum + (Number(s.duration) || 0), 0);
-    if (curTotal !== targetDuration && count > 0) {
-      let allocated = 0;
-      for (let i = 0; i < count - 1; i++) {
-        const scaled = Math.max(1, Math.round(((Number(scriptResult.scenes[i].duration) || 1) / (curTotal || 1)) * targetDuration));
-        scriptResult.scenes[i].duration = scaled;
-        allocated += scaled;
-      }
-      scriptResult.scenes[count - 1].duration = Math.max(1, targetDuration - allocated);
-    }
-
-    // Persist script into database for project continuity
-    const db = readDb();
-    const demoProject = db.projects.find((p: any) => p.id === "proj_demo_keynote") || db.projects[0];
-    if (demoProject) {
-      (demoProject as any).aiScript = scriptResult;
-      demoProject.aspectRatio = aspectRatio;
-      writeDb(db);
-    }
+    // Strictly enforce the requested length server-side.
+    scriptResult.scenes = normalizeDurations(scriptResult.scenes, targetDuration);
+    scriptResult.targetDuration = targetDuration;
 
     res.json({ success: true, script: scriptResult });
   } catch (err: any) {
@@ -2192,6 +2044,27 @@ app.delete("/api/ai/references/:id", (req, res) => {
   res.json({ success });
 });
 
+// Make item durations (integer seconds) sum exactly to the requested total.
+function normalizeDurations<T extends { duration?: any }>(items: T[], total: number): T[] {
+  if (!Array.isArray(items) || items.length === 0 || !(total > 0)) return items;
+  const list = items.slice(0, Math.max(1, Math.floor(total))); // at least 1s per item
+  const weights = list.map((it) => Math.max(0.0001, Number(it.duration) || 1));
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  const extra = Math.floor(total) - list.length; // seconds to share beyond the 1s minimum
+  const raw = weights.map((w) => (w / wSum) * extra);
+  const base = raw.map((r) => Math.floor(r));
+  let left = extra - base.reduce((a, b) => a + b, 0);
+  raw.map((r, i) => ({ i, frac: r - base[i] }))
+    .sort((a, b) => b.frac - a.frac)
+    .forEach(({ i }) => { if (left > 0) { base[i]++; left--; } });
+  list.forEach((it, i) => ((it as any).duration = 1 + base[i]));
+  return list;
+}
+function parseSeconds(v: any, fallback: number): number {
+  const n = parseInt(String(v ?? "").replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 600) : fallback;
+}
+
 // 3. Generate Multi-Shot Storyboard
 const STORYBOARD_CREDIT_COST = 5;
 app.post("/api/ai/generate-storyboard", async (req, res) => {
@@ -2202,9 +2075,12 @@ app.post("/api/ai/generate-storyboard", async (req, res) => {
       return res.status(400).json({ success: false, error: "Prompt is required." });
     }
     const client = getGenAI();
-    // Only real AI generations cost credits; the no-key sample template is free.
-    if (client) {
+    if (!client) {
+      return res.status(503).json({ success: false, error: "AI generation isn't available right now (GEMINI_API_KEY is not set)." });
+    }
+    {
       const credit = billingService.reserveUsage({
+        workspaceId: billingWorkspaceId(req),
         operationType: "ai_generation",
         estimatedQuantity: STORYBOARD_CREDIT_COST,
         unit: "credits",
@@ -2218,15 +2094,21 @@ app.post("/api/ai/generate-storyboard", async (req, res) => {
       }
       reservationId = credit.reservationId;
     }
+    const requestedSeconds = parseSeconds(targetDuration, 30);
     const result = await aiVideoService.generateStoryboard({
       prompt,
-      targetDuration: Number(targetDuration) || 30,
+      targetDuration: requestedSeconds,
       aspectRatio: aspectRatio || "9:16",
       tone: tone || undefined,
       platform: platform || undefined,
       selectedReferenceIds: selectedReferenceIds || [],
       genAIClient: client,
     });
+    // Enforce the requested length server-side, whatever the model returned.
+    if (Array.isArray((result as any).shots)) {
+      (result as any).shots = normalizeDurations((result as any).shots, requestedSeconds);
+      (result as any).targetDuration = requestedSeconds;
+    }
     if (reservationId) {
       billingService.reconcileUsage({
         reservationId,
@@ -2306,7 +2188,7 @@ app.post("/api/ai/turn-into-content", async (req, res) => {
       return res.status(400).json({ success: false, error: "At least one destination is required." });
     }
     const variants = await aiVideoService.turnIntoContent({
-      sourceVideoUrl: sourceVideoUrl || "/storage/renders/sample_test.mp4",
+      sourceVideoUrl: sourceVideoUrl || "",
       sourceTitle: sourceTitle || "Viral Content",
       destinations,
       userGoal,
@@ -2379,18 +2261,18 @@ app.get("/api/ai/test-pipeline", async (req, res) => {
 // SCRIPTS API & AI TOOLS
 // ----------------------------------------------------
 
-app.get("/api/scripts", (req, res) => {
+app.get("/api/scripts", (req: any, res) => {
   const db = readDb();
-  res.json({ success: true, scripts: db.scripts || [] });
+  res.json({ success: true, scripts: (db.scripts || []).filter(ownedBy(req)) });
 });
 
-app.post("/api/scripts", (req, res) => {
+app.post("/api/scripts", (req: any, res) => {
   try {
     const db = readDb();
     if (!db.scripts) db.scripts = [];
     const { id, title, folderId, sourceTool, projectId, projectName, status, hook, mainPoints, callToAction, notes, rawText, platformVariations } = req.body;
     
-    const existingIdx = id ? db.scripts.findIndex((s: any) => s.id === id) : -1;
+    const existingIdx = id ? db.scripts.findIndex((s: any) => s.id === id && s.userId === currentUserId(req)) : -1;
     const now = new Date().toISOString();
 
     if (existingIdx !== -1) {
@@ -2416,7 +2298,8 @@ app.post("/api/scripts", (req, res) => {
     } else {
       // Create new draft
       const newScript = {
-        id: id || `script_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        id: id && !db.scripts.some((s: any) => s.id === id) ? id : `script_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        userId: currentUserId(req),
         title: title || "Untitled Script",
         folderId: folderId || "folder_hooks",
         sourceTool: sourceTool || "manual",
@@ -2441,25 +2324,26 @@ app.post("/api/scripts", (req, res) => {
   }
 });
 
-app.delete("/api/scripts/:id", (req, res) => {
+app.delete("/api/scripts/:id", (req: any, res) => {
   const db = readDb();
   if (db.scripts) {
-    db.scripts = db.scripts.filter((s: any) => s.id !== req.params.id);
+    db.scripts = db.scripts.filter((s: any) => !(s.id === req.params.id && s.userId === currentUserId(req)));
     writeDb(db);
   }
   res.json({ success: true });
 });
 
-app.get("/api/script-folders", (req, res) => {
+app.get("/api/script-folders", (req: any, res) => {
   const db = readDb();
-  res.json({ success: true, folders: db.scriptFolders || [] });
+  res.json({ success: true, folders: (db.scriptFolders || []).filter(ownedBy(req)) });
 });
 
-app.post("/api/script-folders", (req, res) => {
+app.post("/api/script-folders", (req: any, res) => {
   const db = readDb();
   if (!db.scriptFolders) db.scriptFolders = [];
   const newFolder = {
     id: `folder_${Date.now()}`,
+    userId: currentUserId(req),
     name: req.body.name || "New Folder",
     color: req.body.color || "#16D9F5",
     count: 0,
@@ -2788,7 +2672,7 @@ app.get("/api/billing/plans", (req, res) => {
 
 // 2. Get current usage meters, allowances and subscription status
 app.get("/api/billing/usage", (req, res) => {
-  const usage = billingService.getUsage();
+  const usage = billingService.getUsage(billingWorkspaceId(req));
   res.json({
     success: true,
     ...usage,
@@ -2805,6 +2689,7 @@ app.post("/api/billing/create-checkout-session", async (req, res) => {
     const origin = req.headers.origin || "http://localhost:3000";
     const session = await createCheckoutSession({
       planId: planId || "creator",
+      workspaceId: billingWorkspaceId(req),
       successUrl: `${origin}/?billing=success`,
       cancelUrl: `${origin}/?billing=cancel`,
     });
@@ -2832,7 +2717,7 @@ app.post("/api/billing/webhook", (req, res) => {
 // 5. Cancel Subscription
 app.post("/api/billing/cancel-subscription", (req, res) => {
   try {
-    const result = billingService.cancelSubscription();
+    const result = billingService.cancelSubscription(billingWorkspaceId(req));
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });
@@ -2852,6 +2737,7 @@ app.post("/api/billing/upgrade-plan", (req, res) => {
       subscriptionId: `sub_direct_${Date.now()}`,
       planId,
       status: "active",
+      workspaceId: billingWorkspaceId(req),
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     });
     res.json({ ...result, plan: PLANS[planId] });
@@ -2867,11 +2753,21 @@ app.get("/api/billing/credit-packs", (req, res) => {
 });
 
 // 8. Buy Credit Pack
-app.post("/api/billing/buy-credits", (req, res) => {
+app.post("/api/billing/buy-credits", async (req: any, res) => {
   try {
     const { packId } = req.body;
-    const result = billingService.purchaseCreditPack(packId);
-    res.json(result);
+    const db = readDb();
+    const pack = (db.credit_packs || []).find((p: any) => p.id === packId);
+    if (!pack) return res.status(400).json({ success: false, error: "Unknown credit pack." });
+    const origin = req.headers.origin || `${req.protocol}://${req.get("host")}`;
+    // Credits are added only after Stripe confirms payment (checkout.session.completed webhook).
+    const session = await createCreditPackCheckoutSession({
+      pack,
+      workspaceId: billingWorkspaceId(req),
+      successUrl: `${origin}/?billing=credits_success`,
+      cancelUrl: `${origin}/?billing=cancel`,
+    });
+    res.json({ success: true, ...session });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });
   }
@@ -2912,10 +2808,10 @@ app.post("/api/billing/test-simulate-webhook", (req, res) => {
       data: {
         object: {
           id: `cs_sim_${Date.now()}`,
-          client_reference_id: "workspace_default",
+          client_reference_id: billingWorkspaceId(req),
           subscription: `sub_sim_${Date.now()}`,
           customer: "cus_sim_123",
-          metadata: { planId: planId || "creator", workspaceId: "workspace_default" },
+          metadata: { planId: planId || "creator", workspaceId: billingWorkspaceId(req) },
         },
       },
     });

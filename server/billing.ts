@@ -185,7 +185,7 @@ export const PLANS: Record<string, Plan> = {
     stripePriceId: "price_free_tier",
     videoProcessingMinutes: 30,
     storageGb: 2,
-    aiCredits: 0,
+    aiCredits: 10, // starter credits so free users can try AI generation (2 scripts/month)
     connectedSocialAccounts: 0,
     retentionDays: 7,
     watermark: true,
@@ -198,6 +198,7 @@ export const PLANS: Record<string, Plan> = {
     description: "Limited trial usage for individuals exploring AI clipping.",
     features: [
       "30 video-processing minutes/month",
+      "10 AI credits/month",
       "2 GB active cloud storage",
       "AI clipping",
       "Basic captions",
@@ -285,6 +286,8 @@ export interface Subscription {
   updatedAt: string;
 }
 
+export const LEGACY_WORKSPACE_ID = "workspace_default";
+
 export interface UsageAllowance {
   id: string;
   workspaceId: string;
@@ -337,6 +340,7 @@ export interface UsageEvent {
 export interface CreditBalance {
   workspaceId: string;
   subscriptionCredits: number;
+  periodMonth?: string; // billing period the subscription credits belong to
   purchasedCredits: number;
   totalAvailable: number;
   updatedAt: string;
@@ -395,7 +399,33 @@ export const UNIT_COSTS = {
 };
 
 export class BillingService {
-  private defaultWorkspaceId = "workspace_default";
+  // Each signed-in user has their own billing workspace keyed by their user id.
+  // "workspace_default" is the old shared balance, kept only so legacy data isn't lost.
+  private defaultWorkspaceId = LEGACY_WORKSPACE_ID;
+
+  private normalizeWorkspaceId(workspaceId?: string): string {
+    return workspaceId || LEGACY_WORKSPACE_ID;
+  }
+
+  // Ensure the credit balance belongs to the current billing period.
+  // On a new period, plan credits are refilled (purchased pack credits carry over).
+  // Legacy balances without a period stamp are migrated without wiping purchases.
+  private refreshCreditPeriod(cb: CreditBalance, plan: Plan, allowance: UsageAllowance): boolean {
+    const monthKey = this.getCurrentMonthKey();
+    if (cb.periodMonth === monthKey) return false;
+    if (!cb.periodMonth) {
+      // Migration: restore plan credits minus what was actually used this period.
+      const remaining = Math.max(0, plan.aiCredits - (allowance.aiCreditsUsed || 0));
+      cb.subscriptionCredits = Math.max(cb.subscriptionCredits || 0, remaining);
+    } else {
+      cb.subscriptionCredits = plan.aiCredits;
+    }
+    cb.purchasedCredits = cb.purchasedCredits || 0;
+    cb.totalAvailable = cb.subscriptionCredits + cb.purchasedCredits;
+    cb.periodMonth = monthKey;
+    cb.updatedAt = new Date().toISOString();
+    return true;
+  }
 
   constructor() {
     this.ensureTables();
@@ -503,6 +533,7 @@ export class BillingService {
 
   // Get current subscription for a workspace
   public getSubscription(workspaceId = this.defaultWorkspaceId): Subscription {
+    workspaceId = this.normalizeWorkspaceId(workspaceId);
     this.ensureTables();
     const db = readDb();
     const sub = db.subscriptions?.find((s: Subscription) => s.workspaceId === workspaceId && s.status === "active");
@@ -527,6 +558,7 @@ export class BillingService {
 
   // Get current active plan details
   public getActivePlan(workspaceId = this.defaultWorkspaceId): Plan {
+    workspaceId = this.normalizeWorkspaceId(workspaceId);
     const sub = this.getSubscription(workspaceId);
     return PLANS[sub.planId] || PLANS.free;
   }
@@ -539,6 +571,7 @@ export class BillingService {
     creditBalance: CreditBalance;
     warnings: { processing: boolean; processingCritical: boolean; credits: boolean; storage: boolean };
   } {
+    workspaceId = this.normalizeWorkspaceId(workspaceId);
     this.ensureTables();
     const db = readDb();
     const plan = this.getActivePlan(workspaceId);
@@ -568,7 +601,11 @@ export class BillingService {
       writeDb(db);
     } else {
       // Sync limits if plan changed
-      if (allowance.processingMinutesLimit !== plan.videoProcessingMinutes || allowance.storageGbLimit !== plan.storageGb) {
+      if (
+        allowance.processingMinutesLimit !== plan.videoProcessingMinutes ||
+        allowance.storageGbLimit !== plan.storageGb ||
+        allowance.aiCreditsLimit !== plan.aiCredits
+      ) {
         allowance.processingMinutesLimit = plan.videoProcessingMinutes;
         allowance.aiCreditsLimit = plan.aiCredits;
         allowance.storageGbLimit = plan.storageGb;
@@ -584,9 +621,12 @@ export class BillingService {
         subscriptionCredits: plan.aiCredits,
         purchasedCredits: 0,
         totalAvailable: plan.aiCredits,
+        periodMonth: monthKey,
         updatedAt: new Date().toISOString(),
       };
       db.credit_balances.push(creditBalance);
+      writeDb(db);
+    } else if (this.refreshCreditPeriod(creditBalance, plan, allowance)) {
       writeDb(db);
     }
 
@@ -619,9 +659,9 @@ export class BillingService {
     unit: "minutes" | "credits" | "bytes";
   }): { allowed: boolean; reservationId?: string; error?: string; remaining?: number } {
     this.ensureTables();
-    const workspaceId = params.workspaceId || this.defaultWorkspaceId;
-    const db = readDb();
+    const workspaceId = this.normalizeWorkspaceId(params.workspaceId);
     const { allowance, plan, creditBalance } = this.getUsage(workspaceId);
+    const db = readDb();
 
     // Check active reservations to avoid race condition bypass
     const activeReservations = (db.usage_reservations || []).filter(
@@ -785,7 +825,7 @@ export class BillingService {
     mediaType: "video" | "audio" | "image" | "subtitle";
   }): StorageRecord {
     const db = readDb();
-    const workspaceId = params.workspaceId || this.defaultWorkspaceId;
+    const workspaceId = this.normalizeWorkspaceId(params.workspaceId);
     const plan = this.getActivePlan(workspaceId);
     const retentionDays = plan.retentionDays;
 
@@ -827,8 +867,17 @@ export class BillingService {
   }
 
   // Purchase Extra Credit Pack
-  public purchaseCreditPack(packId: string, workspaceId = this.defaultWorkspaceId): { success: boolean; creditsAdded: number } {
+  public purchaseCreditPack(packId: string, workspaceId: string, eventId?: string): { success: boolean; creditsAdded: number } {
+    if (!workspaceId) throw new Error("A workspace is required to add credits.");
+    this.getUsage(workspaceId); // make sure the balance exists for this period first
     const db = readDb();
+    db.billing_events = db.billing_events || [];
+    if (eventId && db.billing_events.some((e: BillingEvent) => e.eventId === eventId)) {
+      return { success: true, creditsAdded: 0 }; // idempotent webhook retry
+    }
+    if (eventId) {
+      db.billing_events.push({ id: `be_${Date.now()}`, eventId, type: "credit_pack", data: { packId, workspaceId }, processedAt: new Date().toISOString() });
+    }
     const pack = (db.credit_packs || []).find((p: CreditPack) => p.id === packId);
     if (!pack) {
       throw new Error(`Credit pack ${packId} not found.`);
@@ -865,6 +914,12 @@ export class BillingService {
     return { success: true, creditsAdded: pack.credits };
   }
 
+  public findWorkspaceByStripeSubscription(stripeSubscriptionId?: string): string | undefined {
+    if (!stripeSubscriptionId) return undefined;
+    const db = readDb();
+    return (db.subscriptions || []).find((s: Subscription) => s.stripeSubscriptionId === stripeSubscriptionId)?.workspaceId;
+  }
+
   // Subscription Lifecycle Handler (Idempotent for Webhooks)
   public handleSubscriptionEvent(event: {
     id: string;
@@ -878,7 +933,7 @@ export class BillingService {
   }): { applied: boolean; reason?: string } {
     this.ensureTables();
     const db = readDb();
-    const workspaceId = event.workspaceId || this.defaultWorkspaceId;
+    const workspaceId = this.normalizeWorkspaceId(event.workspaceId);
 
     // Idempotency check
     db.billing_events = db.billing_events || [];
@@ -929,6 +984,7 @@ export class BillingService {
     if (cb) {
       cb.subscriptionCredits = plan.aiCredits;
       cb.totalAvailable = cb.subscriptionCredits + cb.purchasedCredits;
+      cb.periodMonth = monthKey;
       cb.updatedAt = new Date().toISOString();
     }
 
@@ -947,6 +1003,7 @@ export class BillingService {
 
   // Cancel Subscription
   public cancelSubscription(workspaceId = this.defaultWorkspaceId): { success: boolean; effectiveAt: string } {
+    workspaceId = this.normalizeWorkspaceId(workspaceId);
     const db = readDb();
     const sub = db.subscriptions?.find((s: Subscription) => s.workspaceId === workspaceId);
     if (!sub) throw new Error("No active subscription found.");
