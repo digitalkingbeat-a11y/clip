@@ -1,4 +1,5 @@
 import path from "path";
+import { generateContentWithRetry } from "./geminiRetry";
 import fs from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -315,7 +316,7 @@ Output strict JSON object matching:
       };
       let response;
       try {
-        response = await genAIClient.models.generateContent({
+        response = await generateContentWithRetry(genAIClient, {
           model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
           contents: `Create a multi-shot storyboard for this video request: "${prompt.trim()}". Platform: ${platformLabel}. Tone: "${tone}". Total duration: ${targetDuration}s. Aspect ratio: ${aspectRatio}.`,
           config: {

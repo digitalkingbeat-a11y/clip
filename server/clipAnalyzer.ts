@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { generateContentWithRetry } from "./geminiRetry";
 import { TranscriptionResult } from "./transcription";
 
 export interface ClipCandidate {
@@ -78,7 +79,7 @@ CRITICAL CONSTRAINTS:
 2. 0 <= start_time < end_time <= ${sourceDuration.toFixed(2)}.
 3. (end_time - start_time) MUST be between ${minDuration} and ${maxDuration} seconds.`;
 
-        const response = await genAIClient.models.generateContent({
+        const response = await generateContentWithRetry(genAIClient, {
           model: "gemini-3.8-flash",
           contents: prompt,
           config: {
