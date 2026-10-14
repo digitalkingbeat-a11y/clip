@@ -1,4 +1,5 @@
 import fs from "fs";
+import { generateContentWithRetry } from "./geminiRetry";
 import path from "path";
 import { readDb, writeDb, STORAGE_DIRS } from "./storage";
 import { GoogleGenAI } from "@google/genai";
@@ -1046,7 +1047,7 @@ Target Duration: ${duration} seconds.
 Target Platform: ${platform}.`;
 
       try {
-        const response = await genAI.models.generateContent({
+        const response = await generateContentWithRetry(genAI, {
           model: "gemini-3.8-flash",
           contents: `Concept: "${prompt}". Topic: "${topic || 'Creator Growth'}".`,
           config: { systemInstruction, responseMimeType: "application/json" },
@@ -1080,7 +1081,7 @@ Target Platform: ${platform}.`;
 
     if (genAI) {
       try {
-        const res = await genAI.models.generateContent({
+        const res = await generateContentWithRetry(genAI, {
           model: "gemini-3.8-flash",
           contents: `Rewrite this video hook into 5 different high-converting viral hooks for TikTok / Reels:
 "${currentHook}"
@@ -1123,7 +1124,7 @@ Return JSON:
 
     if (genAI) {
       try {
-        const res = await genAI.models.generateContent({
+        const res = await generateContentWithRetry(genAI, {
           model: "gemini-3.8-flash",
           contents: `Shorten and edit this video script to fit exactly ${targetSeconds} seconds (~${targetWordCount} words). Cut all fluff, maximize punchiness:
 "${rawText}"

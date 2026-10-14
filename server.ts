@@ -1,4 +1,5 @@
 import "./server/env";
+import { generateContentWithRetry } from "./server/geminiRetry";
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -1798,7 +1799,7 @@ Return strict JSON object matching:
   "thumbnailText": "..."
 }`;
 
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
         contents: prompt,
         config: { responseMimeType: "application/json" },
@@ -1860,7 +1861,7 @@ app.post("/api/ai/transcribe-audio", async (req, res) => {
       // Clean base64 header if present
       const base64Clean = audioData.includes(",") ? audioData.split(",")[1] : audioData;
       
-      const response = await ai.models.generateContent({
+      const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
         contents: [
           {
@@ -1959,7 +1960,7 @@ Return a JSON object with this exact structure:
 }`;
 
       try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry(ai, {
           model: "gemini-3.8-flash",
           contents: promptPayload,
           config: {
@@ -2032,7 +2033,7 @@ Return updated scene JSON with fields:
 - mediaType ("${scene.mediaType || 'image'}")`;
 
       try {
-        const response = await ai.models.generateContent({
+        const response = await generateContentWithRetry(ai, {
           model: "gemini-3.8-flash",
           contents: promptText,
           config: { responseMimeType: "application/json" },
