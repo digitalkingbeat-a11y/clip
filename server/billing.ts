@@ -477,7 +477,7 @@ export class BillingService {
           aiCreditsLimit: plan.aiCredits,
           aiCreditsUsed: 0,
           storageGbLimit: plan.storageGb,
-          storageGbUsed: 0.45, // realistic active demo media
+          storageGbUsed: 0,
           socialAccountsLimit: plan.connectedSocialAccounts,
           socialAccountsConnected: db.socialAccounts ? db.socialAccounts.filter((s: any) => s.status === "connected").length : 0,
           resetDate: this.getNextResetDate(),
@@ -592,9 +592,11 @@ export class BillingService {
         aiCreditsLimit: plan.aiCredits,
         aiCreditsUsed: 0,
         storageGbLimit: plan.storageGb,
-        storageGbUsed: 0.45,
+        storageGbUsed: 0,
         socialAccountsLimit: plan.connectedSocialAccounts,
-        socialAccountsConnected: db.socialAccounts ? db.socialAccounts.filter((s: any) => s.status === "connected").length : 0,
+        socialAccountsConnected: (db.socialAccounts || []).filter(
+          (s: any) => s.status === "connected" && (s.userId === workspaceId || s.workspaceId === workspaceId)
+        ).length,
         resetDate: this.getNextResetDate(),
       };
       db.usage_allowances.push(allowance);
