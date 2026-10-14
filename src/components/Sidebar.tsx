@@ -46,6 +46,7 @@ interface SidebarProps {
   onOpenBuyCredits?: () => void;
   onOpenCreatorProgram?: () => void;
   isAdmin?: boolean;
+  onOpenLegal?: (page: "privacy" | "terms" | "contact") => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -58,6 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   allowance,
   creditBalance,
   onOpenPricing,
+  onOpenLegal,
   onOpenBuyCredits,
   onOpenCreatorProgram,
   isAdmin = false,
@@ -282,6 +284,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           </div>
         </div>
+        {onOpenLegal && (
+          <div className="mt-1.5 flex justify-center gap-3 text-[10px] text-[#5C6577]">
+            <button onClick={() => onOpenLegal("privacy")} className="hover:text-white cursor-pointer">Privacy</button>
+            <button onClick={() => onOpenLegal("terms")} className="hover:text-white cursor-pointer">Terms</button>
+            <button onClick={() => onOpenLegal("contact")} className="hover:text-white cursor-pointer">Contact</button>
+          </div>
+        )}
       </div>
     </aside>
   );

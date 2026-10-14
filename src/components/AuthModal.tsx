@@ -7,6 +7,7 @@ interface AuthModalProps {
   onClose: () => void;
   currentUser: UserProfile | null;
   onUserUpdate: (user: UserProfile | null) => void;
+  initialMode?: "signin" | "signup";
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -14,8 +15,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   currentUser,
   onUserUpdate,
+  initialMode = "signin",
 }) => {
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<"signin" | "signup">(initialMode);
+  React.useEffect(() => {
+    if (isOpen) setMode(initialMode);
+  }, [isOpen, initialMode]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
