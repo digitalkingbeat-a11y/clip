@@ -98,8 +98,9 @@ export const Header: React.FC<HeaderProps> = ({
   const showAspectRatioControls =
     !currentView ||
     currentView === "editor" ||
-    currentView === "ai_video" ||
-    currentView === "ai_clips";
+    currentView === "ai_video";
+  // Focused pages hide secondary header pills (they live in the sidebar instead).
+  const isFocusedView = currentView === "ai_clips";
   return (
     <header
       id="main-header"
@@ -227,7 +228,7 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
         {/* Creator Deal Wanted Badge (Hidden on homepage to keep it decluttered and production-focused) */}
-        {onOpenCreatorProgram && currentView !== "home" && (
+        {onOpenCreatorProgram && currentView !== "home" && !isFocusedView && (
           <button
             id="btn-header-creator-program"
             onClick={onOpenCreatorProgram}
@@ -263,7 +264,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Brand Kit Quick Badge (Hidden on homepage) */}
-        {currentView !== "home" && (
+        {currentView !== "home" && !isFocusedView && (
           <button
             id="btn-quick-brand-kit"
             onClick={onOpenBrandKit}
@@ -280,7 +281,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Install PWA Button (Desktop & Tablet; Mobile uses the dedicated Install row in Account menu) */}
-        {canInstall && onOpenPWAInstall && (
+        {canInstall && onOpenPWAInstall && !isFocusedView && (
           <button
             id="btn-header-install-pwa"
             onClick={onOpenPWAInstall}
@@ -293,7 +294,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Send to TikTok Ads Manager Button */}
-        {onOpenTikTokAds && (
+        {onOpenTikTokAds && !isFocusedView && (
           <button
             id="btn-header-tiktok-ads"
             onClick={onOpenTikTokAds}
@@ -306,6 +307,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Quick Upload Button (Desktop/Tablet; Mobile uses bottom nav Create or editor Add Media) */}
+        {!isFocusedView && (
         <button
           id="btn-header-upload"
           onClick={onQuickUpload}
@@ -314,9 +316,11 @@ export const Header: React.FC<HeaderProps> = ({
           <CloudUpload className="w-3.5 h-3.5 text-[#16D9F5]" />
           <span className="hidden sm:inline">{t("header.importMedia")}</span>
         </button>
+        )}
 
         {/* Export / Render - Primary Action with ClipFlow Gradient */}
         {/* Hidden on mobile while the mobile editor is active because MobileEditorView has its own dedicated Export button in its top bar */}
+        {!isFocusedView && (
         <button
           id="btn-header-export"
           onClick={onOpenExportModal}
@@ -328,6 +332,7 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden sm:inline">{t("header.export916")}</span>
           <span className="sm:hidden">{t("header.export")}</span>
         </button>
+        )}
 
         {/* Global Language Selector (EN / ES / FR) */}
         <LanguageSelector variant="header" />

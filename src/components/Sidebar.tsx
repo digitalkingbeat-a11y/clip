@@ -45,6 +45,8 @@ interface SidebarProps {
   onOpenPricing?: () => void;
   onOpenBuyCredits?: () => void;
   onOpenCreatorProgram?: () => void;
+  onOpenTikTokAds?: () => void;
+  onOpenInstall?: () => void;
   isAdmin?: boolean;
   onOpenLegal?: (page: "privacy" | "terms" | "contact") => void;
 }
@@ -62,6 +64,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenLegal,
   onOpenBuyCredits,
   onOpenCreatorProgram,
+  onOpenTikTokAds,
+  onOpenInstall,
   isAdmin = false,
 }) => {
   const { t } = useLanguage();
@@ -225,6 +229,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <LanguageSelector variant="sidebar" />
         </div>
       </div>
+
+      {/* Secondary tools moved out of the page header to keep it focused */}
+      {(onOpenTikTokAds || onOpenInstall) && (
+        <div className="px-2.5 pt-2 flex gap-1.5 flex-shrink-0">
+          {onOpenTikTokAds && (
+            <button
+              id="btn-sidebar-tiktok-ads"
+              onClick={onOpenTikTokAds}
+              className="flex-1 px-2 py-1.5 rounded-lg bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-[10.5px] font-semibold text-gray-200 cursor-pointer"
+              title="Send finished video creatives to TikTok Ads Manager"
+            >
+              TikTok Ads
+            </button>
+          )}
+          {onOpenInstall && (
+            <button
+              id="btn-sidebar-install"
+              onClick={onOpenInstall}
+              className="flex-1 px-2 py-1.5 rounded-lg bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-[10.5px] font-semibold text-gray-200 cursor-pointer"
+              title="Install ClipFlow as an app"
+            >
+              Install app
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Creator Partner Deal Box */}
       {onOpenCreatorProgram && (
