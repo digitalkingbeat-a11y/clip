@@ -38,6 +38,8 @@ import { affiliateService } from "./server/affiliateService";
 import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService } from "./server/podcastService";
+import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
+import { registerOwnedFile, resolveOwnedMediaPath } from "./server/mediaOwnership";
 
 
 const execFileAsync = promisify(execFile);
@@ -2060,7 +2062,13 @@ Return updated scene JSON with fields:
 
 // 1. Video Providers Status
 app.get("/api/ai/video-providers", (req, res) => {
-  const providers = aiVideoService.getVideoProviders();
+  const providers = aiVideoService.getVideoProviders().map((p: any) =>
+    p.id === "google_veo"
+      ? { ...p, name: `Google Veo 3.1 Fast (${VEO_CONFIG.model})`, status: veoAvailable() ? "connected" : "unavailable",
+          badge: veoAvailable() ? `${VEO_CONFIG.creditsPerSecond} credits / second` : "Needs GEMINI_API_KEY",
+          costPerSecond: VEO_CONFIG.googlePriceUsdPerSecond }
+      : p
+  );
   res.json({ success: true, providers });
 });
 
@@ -2177,23 +2185,72 @@ app.post("/api/ai/generate-storyboard", async (req, res) => {
   }
 });
 
-// 4. Render Individual Shot
-app.post("/api/ai/render-shot", async (req, res) => {
+// 4. Render Individual Shot as a Quick preview (free text card, no AI footage)
+app.post("/api/ai/render-shot", async (req: any, res) => {
   try {
     const { shot, aspectRatio } = req.body;
     if (!shot) {
       return res.status(400).json({ success: false, error: "Shot data is required." });
     }
     const result = await aiVideoService.renderShot(shot, aspectRatio || "9:16");
-    res.json({ success: true, ...result });
+    registerOwnedFile(result.videoUrl, currentUserId(req));
+    if (result.thumbnailUrl) registerOwnedFile(result.thumbnailUrl, currentUserId(req));
+    res.json({ success: true, mode: "preview", ...result });
   } catch (err: any) {
     console.error("render-shot error:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to render shot" });
   }
 });
 
+// 4b. AI video (Veo): background jobs per shot
+function veoAvailable(): boolean {
+  return !!process.env.GEMINI_API_KEY && process.env.VEO_ENABLED !== "false";
+}
+app.get("/api/ai/veo/config", (req, res) => {
+  res.json({
+    success: true,
+    available: veoAvailable(),
+    model: VEO_CONFIG.model,
+    creditsPerSecond: VEO_CONFIG.creditsPerSecond,
+    allowedDurations: VEO_CONFIG.allowedDurations,
+    googlePriceUsdPerSecond: VEO_CONFIG.googlePriceUsdPerSecond,
+  });
+});
+app.post("/api/ai/veo/shots", (req: any, res) => {
+  if (!veoAvailable()) {
+    return res.status(503).json({ success: false, veoUnavailable: true, error: "AI video (Veo) isn't available right now. Use Quick preview (free)." });
+  }
+  const { shot, aspectRatio, style, idempotencyKey } = req.body || {};
+  if (!shot || !shot.id) return res.status(400).json({ success: false, error: "Shot data is required." });
+  const ar = aspectRatio === "16:9" ? "16:9" : "9:16";
+  const visual = String(shot.prompt || shot.visualDescription || shot.title || "").trim();
+  if (!visual) return res.status(400).json({ success: false, error: "This shot has no visual description." });
+  const parts = [
+    visual,
+    style ? `Style: ${style}.` : "",
+    shot.cameraAngle ? `Camera: ${shot.cameraAngle}${shot.cameraMovement ? ", " + String(shot.cameraMovement).replace(/_/g, " ") : ""}.` : "",
+    shot.audio?.ambience ? `Ambient sound: ${shot.audio.ambience}.` : "",
+    ar === "9:16" ? "Vertical 9:16 framing." : "Widescreen 16:9 framing.",
+    "No on-screen text or subtitles.",
+  ].filter(Boolean);
+  const out = veoJobService.createJob({
+    userId: currentUserId(req),
+    shotId: String(shot.id),
+    prompt: parts.join(" "),
+    aspectRatio: ar,
+    sceneDuration: Number(shot.duration) || 4,
+    idempotencyKey: idempotencyKey ? `${shot.id}:${String(idempotencyKey).slice(0, 80)}` : undefined,
+  });
+  if (!out.job) return res.status(out.status || 500).json({ success: false, outOfCredits: out.outOfCredits, error: out.error });
+  res.json({ success: true, reused: !!out.reused, job: out.job });
+});
+app.get("/api/ai/veo/jobs", (req: any, res) => {
+  const ids = typeof req.query.ids === "string" && req.query.ids ? String(req.query.ids).split(",") : undefined;
+  res.json({ success: true, jobs: veoJobService.getJobs(currentUserId(req), ids) });
+});
+
 // 5. Prompt-Based Shot Editing & Versioning
-app.post("/api/ai/edit-shot-prompt", async (req, res) => {
+app.post("/api/ai/edit-shot-prompt", async (req: any, res) => {
   try {
     const { shot, editInstruction, aspectRatio } = req.body;
     if (!shot || !editInstruction) {
@@ -2205,6 +2262,7 @@ app.post("/api/ai/edit-shot-prompt", async (req, res) => {
       aspectRatio: aspectRatio || "9:16",
       genAIClient: getGenAI(),
     });
+    if ((result as any).videoUrl) registerOwnedFile((result as any).videoUrl, currentUserId(req));
     res.json({ success: true, ...result });
   } catch (err: any) {
     console.error("edit-shot-prompt error:", err);
@@ -2212,19 +2270,61 @@ app.post("/api/ai/edit-shot-prompt", async (req, res) => {
   }
 });
 
-// 6. Combine Finished Storyboard into Master Video
-app.post("/api/ai/combine-storyboard", async (req, res) => {
+// 6. Combine finished shots through the ffmpeg sequence pipeline (trim/fit to scene
+// durations, on-screen text, word captions from the voiceover lines).
+app.post("/api/ai/combine-storyboard", async (req: any, res) => {
   try {
     const { shots, title, aspectRatio } = req.body;
     if (!Array.isArray(shots) || shots.length === 0) {
       return res.status(400).json({ success: false, error: "Shots array is required." });
     }
-    const result = await aiVideoService.combineStoryboard({
-      shots,
-      title: title || "AI Master Video",
-      aspectRatio: aspectRatio || "9:16",
+    const userId = currentUserId(req);
+    const scenes: any[] = [];
+    const captions: any[] = [];
+    let t = 0;
+    for (let i = 0; i < shots.length; i++) {
+      const s = shots[i];
+      const duration = Math.max(1, Number(s.duration) || 4);
+      const localPath = resolveOwnedMediaPath(s.generatedVideoUrl, userId, ["renders", "uploads"]);
+      if (!localPath) {
+        return res.status(400).json({ success: false, error: `Shot ${i + 1} isn't rendered yet (or its video isn't yours). Render it first.` });
+      }
+      scenes.push({ sceneNumber: i + 1, duration, localPath, onScreenText: s.onScreenText || "", voiceover: s.audio?.dialogue || "" });
+      const words = String(s.audio?.dialogue || "").split(/\s+/).filter(Boolean);
+      words.forEach((w, k) => {
+        const per = duration / words.length;
+        captions.push({ word: w, start: +(t + k * per).toFixed(3), end: +(t + (k + 1) * per).toFixed(3) });
+      });
+      t += duration;
+    }
+    const outFileName = `ClipFlow_Master_${Date.now()}.mp4`;
+    const outPath = path.join(STORAGE_DIRS.renders, outFileName);
+    const ar = aspectRatio === "16:9" ? "16:9" : aspectRatio === "1:1" ? "1:1" : "9:16";
+    await ffmpegService.renderSequenceWithCaptions(scenes, captions, {}, outPath, { aspectRatio: ar } as any);
+    registerOwnedFile(outFileName, userId);
+    let masterThumbnailUrl = "";
+    try {
+      await ffmpegService.generateThumbnail(outPath, 0.5, path.join(STORAGE_DIRS.thumbnails, `${outFileName}.jpg`));
+      masterThumbnailUrl = `/storage/thumbnails/${outFileName}.jpg`;
+      registerOwnedFile(`${outFileName}.jpg`, userId);
+    } catch {}
+    const db = readDb();
+    db.media = db.media || [];
+    db.media.unshift({
+      id: `med_master_${Date.now()}`,
+      userId,
+      name: title || "AI Master Video",
+      type: "video",
+      format: "mp4",
+      duration: Math.round(t),
+      sizeBytes: fs.statSync(outPath).size,
+      url: `/storage/renders/${outFileName}`,
+      thumbnail: masterThumbnailUrl,
+      tags: ["ai-video", "render"],
+      createdAt: new Date().toISOString().split("T")[0],
     });
-    res.json({ success: true, ...result });
+    writeDb(db);
+    res.json({ success: true, masterVideoUrl: `/storage/renders/${outFileName}`, masterThumbnailUrl, duration: t, filename: outFileName });
   } catch (err: any) {
     console.error("combine-storyboard error:", err);
     res.status(500).json({ success: false, error: err.message || "Failed to combine storyboard" });
@@ -2232,9 +2332,12 @@ app.post("/api/ai/combine-storyboard", async (req, res) => {
 });
 
 // 7. Turn Into Content
-app.post("/api/ai/turn-into-content", async (req, res) => {
+app.post("/api/ai/turn-into-content", async (req: any, res) => {
   try {
     const { sourceVideoUrl, sourceTitle, destinations, userGoal, userProductDetails, projectId } = req.body;
+    if (sourceVideoUrl && !resolveOwnedMediaPath(sourceVideoUrl, currentUserId(req), ["renders", "uploads", "clips"])) {
+      return res.status(404).json({ success: false, error: "That video wasn't found in your library." });
+    }
     if (!destinations || !Array.isArray(destinations) || destinations.length === 0) {
       return res.status(400).json({ success: false, error: "At least one destination is required." });
     }
@@ -2245,6 +2348,7 @@ app.post("/api/ai/turn-into-content", async (req, res) => {
       userGoal,
       userProductDetails,
     });
+    for (const v of variants as any[]) if (v?.videoUrl) registerOwnedFile(v.videoUrl, currentUserId(req));
 
     // Save all versions under the original project
     const db = readDb();
@@ -3434,6 +3538,8 @@ async function startServer() {
     });
   }
 
+  veoJobService.configure(createGenAIVeoProvider(() => getGenAI()), billingService as any);
+  veoJobService.start();
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`ClipFlow Video server running on http://0.0.0.0:${PORT}`);
     try {

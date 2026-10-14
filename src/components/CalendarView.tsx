@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { PlatformChip } from "./PlatformChip";
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -1306,17 +1307,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                               </span>
                               {/* Platform Icons */}
                               <div className="flex items-center gap-0.5 flex-shrink-0">
-                                {post.platforms.slice(0, 2).map((p) => {
-                                  const pCfg = PLATFORM_CONFIG[p];
-                                  return (
-                                    <span
-                                      key={p}
-                                      className={`text-[8px] font-bold px-1 rounded uppercase ${pCfg?.bg || "bg-gray-800 text-white"}`}
-                                    >
-                                      {pCfg?.iconLabel || p[0]}
-                                    </span>
-                                  );
-                                })}
+                                {post.platforms.slice(0, 2).map((p) => (
+                                  <PlatformChip key={p} platform={p} size="xs" showLabel={false} />
+                                ))}
                               </div>
                             </div>
 
@@ -1485,17 +1478,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                               {/* Target Platforms */}
                               <div className="flex items-center justify-between pt-2 border-t border-[#272D3A]/60 text-[10px]">
                                 <div className="flex flex-wrap gap-1">
-                                  {post.platforms.map((plat) => {
-                                    const pCfg = PLATFORM_CONFIG[plat];
-                                    return (
-                                      <span
-                                        key={plat}
-                                        className={`font-mono text-[9px] px-1.5 py-0.5 rounded border capitalize ${pCfg?.bg || "bg-black text-white border-[#272D3A]"}`}
-                                      >
-                                        {plat}
-                                      </span>
-                                    );
-                                  })}
+                                  {post.platforms.map((plat) => (<PlatformChip key={plat} platform={plat} size="xs" />))}
                                 </div>
                                 <span className="text-gray-400 group-hover:text-[#16D9F5] font-semibold text-[10px] transition-colors">
                                   Edit →
@@ -1753,17 +1736,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
                         <div className="flex items-center justify-between pt-3 border-t border-[#272D3A]/60">
                           <div className="flex flex-wrap gap-1">
-                            {post.platforms.map((plat) => {
-                              const pCfg = PLATFORM_CONFIG[plat];
-                              return (
-                                <span
-                                  key={plat}
-                                  className={`capitalize font-mono text-[10px] px-2 py-0.5 rounded border ${pCfg?.bg || "bg-black text-white border-[#272D3A]"}`}
-                                >
-                                  {plat}
-                                </span>
-                              );
-                            })}
+                            {post.platforms.map((plat) => (<PlatformChip key={plat} platform={plat} size="xs" />))}
                           </div>
                           <span className="text-xs text-[#16D9F5] font-semibold">
                             Edit Post →
@@ -1902,33 +1875,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       const pCfg = PLATFORM_CONFIG[plat];
 
                       return (
-                        <button
-                          key={plat}
-                          type="button"
-                          disabled={!isConnected}
-                          onClick={() => togglePlatform(plat)}
-                          className={`py-2 px-2.5 rounded-xl text-left border transition-all flex items-center justify-between ${
-                            !isConnected
-                              ? "opacity-40 bg-[#0E121B] border-[#272D3A] cursor-not-allowed"
-                              : isChecked
-                              ? `${pCfg.bg} border-current shadow-sm cursor-pointer`
-                              : "bg-[#171C27] text-gray-400 border-[#272D3A] hover:border-gray-500 cursor-pointer"
-                          }`}
-                        >
-                          <div>
-                            <span className="font-semibold block">{pCfg.name}</span>
-                            <span className="text-[10px] text-[#9CA5B5]">
-                              {isConnected ? "Connected" : "Not connected"}
-                            </span>
-                          </div>
-                          <span
-                            className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
-                              isChecked ? "bg-[#168CFF] text-white" : "border border-gray-600"
-                            }`}
-                          >
-                            {isChecked && <Check className="w-3 h-3" />}
-                          </span>
-                        </button>
+                        <div key={plat} className="flex flex-col items-start gap-0.5">
+                          <PlatformChip
+                            platform={plat}
+                            selected={isChecked}
+                            disabled={!isConnected}
+                            onClick={() => isConnected && togglePlatform(plat)}
+                            title={isConnected ? pCfg.name : `${pCfg.name} (not connected)`}
+                          />
+                          <span className="text-[9px] text-[#9CA5B5] pl-1">{isConnected ? "Connected" : "Not connected"}</span>
+                        </div>
                       );
                     }
                   )}

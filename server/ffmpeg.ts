@@ -668,6 +668,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     fs.writeFileSync(assPath, content, "utf-8");
   }
 
+  async hasAudioStream(file: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(this.ffprobePath || "ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file]);
+      return String(stdout).trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Render a multi-scene sequence matching exact scene order, timing, overlay text, and aspect ratio
    */
@@ -676,6 +685,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       sceneNumber: number;
       duration: number;
       sourceUrl?: string;
+      localPath?: string;
       onScreenText?: string;
       voiceover?: string;
     }[],
@@ -709,19 +719,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const segDuration = Math.max(1, sc.duration || 5);
         const segPath = path.join(tempDir, `seg_${i}.mp4`);
 
-        let inputPath = "";
-        if (sc.sourceUrl) {
-          const rawFilename = path.basename(sc.sourceUrl.split("?")[0]);
-          // Timeline scenes can point at uploads or at shots rendered by AI Video (renders/).
-          const storageRoot = path.join(path.dirname(outRenderPath), "..");
-          for (const dir of ["uploads", "renders"]) {
-            const candidate = path.join(storageRoot, dir, rawFilename);
-            if (fs.existsSync(candidate)) {
-              inputPath = candidate;
-              break;
-            }
-          }
-        }
+        // Only paths resolved server-side for the requesting user (see resolveOwnedMediaPath).
+        const inputPath = (sc as any).localPath && fs.existsSync((sc as any).localPath) ? (sc as any).localPath : "";
 
         // Color palette for scenes if synthetic background is needed
         const bgColors = ["0x1e1b4b", "0x0f172a", "0x111827", "0x311042", "0x022c22"];
@@ -730,11 +729,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const segArgs: string[] = ["-y"];
 
         if (inputPath && fs.existsSync(inputPath)) {
-          // Cut from real video
+          // Real footage (uploads, renders or Veo shots). Veo clips come in fixed
+          // 4/6/8s lengths: trim longer clips, hold the last frame on shorter ones.
+          const hasAudio = await this.hasAudioStream(inputPath);
+          const fit = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${segDuration.toFixed(3)}`;
+          segArgs.push("-i", inputPath);
+          if (!hasAudio) segArgs.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo");
           segArgs.push(
+            "-filter_complex",
+            hasAudio
+              ? `[0:v]${fit}[v];[0:a]aresample=44100,apad[a]`
+              : `[0:v]${fit}[v]`,
+            "-map", "[v]",
+            "-map", hasAudio ? "[a]" : "1:a",
             "-t", segDuration.toFixed(3),
-            "-i", inputPath,
-            "-vf", `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH}:(in_w-${targetW})/2:(in_h-${targetH})/2`,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",

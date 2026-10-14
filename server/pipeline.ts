@@ -1,3 +1,4 @@
+import { resolveOwnedMediaPath, registerOwnedFile } from "./mediaOwnership";
 import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
@@ -500,18 +501,27 @@ export class PipelineManager {
     let inputClipPath = "";
 
     // Check if custom sourceUrl is provided from timeline
+    // Only files owned by this user (their uploads/renders) may be used as sources.
     if (options && (options as any).sourceUrl) {
-      const filename = path.basename((options as any).sourceUrl.split("?")[0]);
-      const potentialUpload = path.join(STORAGE_DIRS.uploads, filename);
-      if (fs.existsSync(potentialUpload)) {
-        inputClipPath = potentialUpload;
-      }
+      inputClipPath = resolveOwnedMediaPath((options as any).sourceUrl, userId, ["uploads", "renders", "clips"]);
     }
 
     const hasScenes = !!(options && Array.isArray((options as any).scenes) && (options as any).scenes.length > 0);
+    if (options && (options as any).sourceUrl && !inputClipPath && !hasScenes && !clip) {
+      throw new Error("That source video wasn't found in your library.");
+    }
+    if (hasScenes) {
+      (options as any).scenes = (options as any).scenes.map((sc: any) => {
+        const { localPath: _ignored, ...rest } = sc || {};
+        const url = rest.sourceUrl || rest.mediaUrl;
+        const localPath = url ? resolveOwnedMediaPath(url, userId, ["uploads", "renders"]) : "";
+        // Files that aren't this user's are never read; the scene renders as a plain card.
+        return { ...rest, localPath };
+      });
+    }
 
     if (!inputClipPath && !hasScenes) {
-      if (!clip) throw new Error("Clip not found.");
+      if (!clip || project?.userId !== userId) throw new Error("Clip not found.");
       inputClipPath = path.join(STORAGE_DIRS.clips, `clip_916_${clip.id}.mp4`);
     }
 
@@ -534,6 +544,7 @@ export class PipelineManager {
       throw new Error(`Rendering failed: ${renderError.message}`);
     }
 
+    registerOwnedFile(renderFilename, userId);
     // Upload rendered master MP4 to Cloudflare R2 / storage
     const renderObjectKey = `users/${userId}/projects/${projectId}/renders/${renderFilename}`;
     const renderMedia = await storageService.uploadFile({
