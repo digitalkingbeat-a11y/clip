@@ -102,7 +102,7 @@ CRITICAL CONSTRAINTS:
 
     // Fallback if AI was unavailable or returned empty
     if (!candidates || candidates.length === 0) {
-      candidates = this.generateAlgorithmicCandidates(sourceDuration);
+      candidates = this.generateAlgorithmicCandidates(sourceDuration, transcript);
     }
 
     // CRITICAL: Validate every timestamp against actual source duration
@@ -181,21 +181,17 @@ CRITICAL CONSTRAINTS:
   /**
    * Algorithmic candidate generation based on video time partitions
    */
-  private generateAlgorithmicCandidates(sourceDuration: number): any[] {
+  private generateAlgorithmicCandidates(sourceDuration: number, transcript?: TranscriptionResult): any[] {
+    // Time-based slices used only when AI analysis is unavailable. Titles and
+    // hooks come from the real transcript of each slice, never canned text.
     const list: any[] = [];
-    const titles = [
-      "The 3-Second Retention Rule for High-Growth Creators",
-      "Why High Production Quality Is Often a Trap",
-      "The 1-Hour to 20-Asset Repurposing Framework",
-      "The Exact Call-to-Action That Doubled Our Leads",
-    ];
-
-    const hooks = [
-      "If your video doesn't grab attention in three seconds, nobody watches.",
-      "You don't need a five thousand dollar camera to make viral content.",
-      "Never record anything once unless you plan to slice it twenty times.",
-      "Stop telling people to click link in bio. Test this instead.",
-    ];
+    const textIn = (start: number, end: number) =>
+      (transcript?.words || [])
+        .filter((w) => w.start >= start && w.start < end)
+        .map((w) => w.word)
+        .join(" ")
+        .trim();
+    const firstSentence = (t: string) => (t.match(/^[^.!?]*[.!?]?/)?.[0] || t).trim();
 
     const types = ["hook", "educational", "actionable_tip", "story"];
 
@@ -207,17 +203,18 @@ CRITICAL CONSTRAINTS:
       const end = parseFloat(Math.min(sourceDuration, start + sliceLen).toFixed(2));
 
       if (end - start >= 5) {
+        const sliceText = textIn(start, end);
         list.push({
-          title: titles[i % titles.length],
+          title: (firstSentence(sliceText).split(" ").slice(0, 8).join(" ") || `Clip ${i + 1}`),
           start_time: start,
           end_time: end,
-          hook_reason: hooks[i % hooks.length],
-          context_reason: "Clear standalone insight with high-hook value and natural speech cadence.",
+          hook_reason: sliceText ? `Opens with: "${firstSentence(sliceText)}"` : "Time-based segment (AI analysis unavailable).",
+          context_reason: "Time-based segment chosen without AI analysis.",
           content_type: types[i % types.length],
-          suggested_caption: "Save this strategy for your next recording session! #creator #video",
-          hook_strength: 92 + (i % 5),
-          retention_potential: 94 + (i % 4),
-          tags: ["Retention", "Strategy", "ClipFlow"],
+          suggested_caption: firstSentence(sliceText),
+          hook_strength: 0,
+          retention_potential: 0,
+          tags: [],
         });
       }
     }
