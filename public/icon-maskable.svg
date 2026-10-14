@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="cf_grad_mask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#933CFF" />
+      <stop offset="50%" stop-color="#168CFF" />
+      <stop offset="100%" stop-color="#16D9F5" />
+    </linearGradient>
+    <filter id="shadow_mask" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#168CFF" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Full-bleed background for maskable cropping -->
+  <rect width="512" height="512" fill="#080A0F" />
+
+  <!-- Safe Zone Container (centered within 80% circle, 51.2px padding on all sides) -->
+  <g transform="translate(51.2, 51.2) scale(0.8)">
+    <rect x="30" y="30" width="452" height="452" rx="90" fill="#0E131E" stroke="#1D2433" stroke-width="4" filter="url(#shadow_mask)" />
+    <!-- Diagonal Accent -->
+    <path d="M120 180 L360 120 L392 180 L152 240 Z" fill="url(#cf_grad_mask)" opacity="0.15" />
+    <!-- Kinetic Scissor Stroke -->
+    <path d="M168 160 L232 256 L168 352" fill="none" stroke="url(#cf_grad_mask)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" />
+    <!-- Kinetic Play Arrow -->
+    <path d="M228 176 L364 256 L228 336 Z" fill="url(#cf_grad_mask)" />
+    <circle cx="380" cy="256" r="14" fill="#16D9F5" />
+    <circle cx="410" cy="256" r="8" fill="#16D9F5" opacity="0.6" />
+  </g>
+</svg>

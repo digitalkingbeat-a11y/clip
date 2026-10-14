@@ -1,0 +1,6 @@
+{
+  "name": "ClipFlow Video",
+  "description": "Professional AI video creator, clipper, multitrack timeline editor, brand kit, and auto-publishing platform.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

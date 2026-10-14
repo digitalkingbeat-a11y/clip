@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#080A0F" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ClipFlow" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>ClipFlow Video — AI Video Creator, Clipper &amp; Editor</title>
+    <meta name="description" content="Professional AI video creator, clipper, multitrack timeline editor, brand kit, and auto-publishing platform." />
+    <meta property="og:title" content="ClipFlow Video — AI Video Creator, Clipper &amp; Editor" />
+    <meta property="og:description" content="Professional AI video creator, clipper, multitrack timeline editor, brand kit, and auto-publishing platform." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        function isExtensionError(msg, source, stack) {
+          var str = ((msg || '') + ' ' + (source || '') + ' ' + (stack || '')).toLowerCase();
+          return (
+            str.indexOf('metamask') !== -1 ||
+            str.indexOf('chrome-extension://') !== -1 ||
+            str.indexOf('moz-extension://') !== -1 ||
+            str.indexOf('safari-extension://') !== -1 ||
+            str.indexOf('failed to connect to metamask') !== -1 ||
+            str.indexOf('ethereum') !== -1
+          );
+        }
+
+        window.addEventListener('error', function(event) {
+          if (isExtensionError(event.message, event.filename, event.error && event.error.stack)) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event.reason;
+          var msg = typeof reason === 'string' ? reason : (reason && reason.message) || '';
+          var stack = (reason && reason.stack) || '';
+          if (isExtensionError(msg, '', stack)) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

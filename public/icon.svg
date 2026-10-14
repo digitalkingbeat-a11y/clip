@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="cf_grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#933CFF" />
+      <stop offset="50%" stop-color="#168CFF" />
+      <stop offset="100%" stop-color="#16D9F5" />
+    </linearGradient>
+    <linearGradient id="glow_grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#933CFF" stop-opacity="0.5" />
+      <stop offset="100%" stop-color="#16D9F5" stop-opacity="0" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#168CFF" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="512" height="512" rx="112" fill="#080A0F" />
+
+  <!-- Outer Ambient Glow Ring -->
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="none" stroke="url(#glow_grad)" stroke-width="6" opacity="0.6" />
+
+  <!-- Inner Badge Container -->
+  <rect x="80" y="80" width="352" height="352" rx="72" fill="#0E131E" stroke="#1D2433" stroke-width="4" filter="url(#shadow)" />
+
+  <!-- Diagonal Clip Ribbon Accent -->
+  <path d="M120 180 L360 120 L392 180 L152 240 Z" fill="url(#cf_grad)" opacity="0.15" />
+
+  <!-- Dynamic Playhead & Film Kinetic Shapes -->
+  <!-- Left Scissor/Blade Motif -->
+  <path d="M168 160 L232 256 L168 352" fill="none" stroke="url(#cf_grad)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Center Play / Flow Arrow -->
+  <path d="M228 176 L364 256 L228 336 Z" fill="url(#cf_grad)" />
+
+  <!-- Fast Forward / Audio Wave Accent Dots -->
+  <circle cx="380" cy="256" r="14" fill="#16D9F5" />
+  <circle cx="410" cy="256" r="8" fill="#16D9F5" opacity="0.6" />
+</svg>
