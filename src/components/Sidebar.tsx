@@ -143,8 +143,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               CF
             </div>
             <div className="truncate">
-              <p className="text-xs font-medium text-[#F7F8FA] group-hover:text-white truncate">Creator Studio Pro</p>
-              <p className="text-[10px] text-[#9CA5B5] truncate">Autonomous Pipeline</p>
+              <p className="text-xs font-medium text-[#F7F8FA] group-hover:text-white truncate">ClipFlow Studio</p>
+              <p className="text-[10px] text-[#9CA5B5] truncate">{plan?.name ? `${plan.name} plan` : "Free plan"}</p>
             </div>
           </div>
           <ChevronRight className="w-3.5 h-3.5 text-[#9CA5B5] flex-shrink-0" />
@@ -255,7 +255,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center justify-between text-xs leading-none">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="font-bold text-[10px] uppercase tracking-wider text-[#16D9F5] px-1.5 py-0.5 rounded bg-[#16D9F5]/10 border border-[#16D9F5]/30 flex-shrink-0">
-                {plan?.name ? plan.name.toUpperCase() : "FREE"}
+                {plan?.name || "Free"}
               </span>
               <span className="text-[#9CA5B5] text-[10px]">·</span>
               <span className="text-[11px] text-[#9CA5B5] truncate" title={`Processing usage: ${procUsed} of ${procLimit} minutes used`}>
