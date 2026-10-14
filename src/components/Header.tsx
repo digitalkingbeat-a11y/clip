@@ -104,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       id="main-header"
-      className="h-14 bg-[#0C0F16] border-b border-[#1C222E] px-3 md:px-4 flex items-center justify-between select-none z-20 flex-shrink-0"
+      className="h-11 bg-[#0C0F16] border-b border-[#1C222E] px-3 md:px-4 flex items-center justify-between select-none z-20 flex-shrink-0"
     >
       {/* Mobile Branding (Visible only on mobile since desktop sidebar has the logo) - Clickable to return to homepage */}
       <div className="flex md:hidden items-center gap-2">
@@ -124,55 +124,31 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="text-xs font-bold text-white tracking-tight group-hover:text-[#16D9F5] transition-colors">ClipFlow</span>
         </button>
         
-        {/* Mobile Save Indicator */}
-        <div
-          className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-            saveStatus === "saving"
-              ? "text-[#16D9F5] bg-[#168CFF]/15 border-[#168CFF]/30"
-              : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-          }`}
-          title={saveStatus === "saving" ? "Persisting state to local storage..." : `Last saved at ${savedTimeStr}`}
-        >
-          {saveStatus === "saving" ? (
-            <>
-              <RefreshCw className="w-2.5 h-2.5 animate-spin text-[#16D9F5]" />
-              <span className="hidden xs:inline">{t("header.saving")}</span>
-            </>
-          ) : (
-            <>
-              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-              <span className="font-mono text-[9px]">{savedTimeStr}</span>
-            </>
-          )}
-        </div>
+        {/* Mobile Save Indicator (tiny text) */}
+        <span className={`text-[10px] ${saveStatus === "saving" ? "text-[#16D9F5]" : "text-gray-500"}`} title={`Last saved at ${savedTimeStr}`}>
+          {saveStatus === "saving" ? t("header.saving") : `✓ ${savedTimeStr}`}
+        </span>
       </div>
 
-      {/* Desktop Left: Save status indicator (reclaimed space for editor controls) */}
-      <div className="hidden md:flex items-center gap-3">
-        {/* Status Indicator: 'Saving...' or 'Last saved at HH:MM' */}
-        <div
+      {/* Desktop Left: small saved-status text */}
+      <div className="hidden md:flex items-center">
+        <span
           id="header-save-indicator"
-          className={`flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border transition-all duration-200 ${
-            saveStatus === "saving"
-              ? "text-[#16D9F5] bg-[#168CFF]/15 border-[#168CFF]/30"
-              : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-          }`}
-          title={saveStatus === "saving" ? "Persisting state to local storage..." : `Last saved at ${savedTimeStr}`}
+          className={`flex items-center gap-1 text-[11px] ${saveStatus === "saving" ? "text-[#16D9F5]" : "text-gray-500"}`}
+          title={saveStatus === "saving" ? "Saving…" : `Last saved at ${savedTimeStr}`}
         >
           {saveStatus === "saving" ? (
             <>
-              <RefreshCw className="w-3 h-3 animate-spin text-[#16D9F5]" />
-              <span>{t("header.saving")}</span>
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              {t("header.saving")}
             </>
           ) : (
             <>
-              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-              <span id="header-last-saved-time">
-                {t("header.lastSavedAt", { time: savedTimeStr }) || `Last saved at ${savedTimeStr}`}
-              </span>
+              <CheckCircle2 className="w-3 h-3 text-emerald-500/70" />
+              <span id="header-last-saved-time">Saved {savedTimeStr}</span>
             </>
           )}
-        </div>
+        </span>
       </div>
 
       {/* Center: Aspect Ratio format toggles (Shown only where a workflow needs them) */}
@@ -227,91 +203,26 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
-        {/* Creator Deal Wanted Badge (Hidden on homepage to keep it decluttered and production-focused) */}
-        {onOpenCreatorProgram && currentView !== "home" && !isFocusedView && (
-          <button
-            id="btn-header-creator-program"
-            onClick={onOpenCreatorProgram}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gradient-to-r from-[#FE2C55]/20 via-[#933CFF]/20 to-[#16D9F5]/20 hover:from-[#FE2C55]/30 hover:to-[#16D9F5]/30 border border-[#FE2C55]/40 text-xs font-bold text-white transition-all cursor-pointer shadow-xs active:scale-95"
-            title="Creators Wanted: Get 1 to 2 Years of ClipFlow Free"
-          >
-            <Flame className="w-3.5 h-3.5 text-[#FE2C55] animate-pulse" />
-            <span className="hidden sm:inline">Creators Wanted</span>
-            <span className="text-[10px] px-1.5 py-0.2 bg-[#FE2C55] text-white font-extrabold rounded-full">
-              Free 1-2 Yrs
-            </span>
-          </button>
-        )}
-
-        {/* Plan Upgrade Badge (Hidden on homepage) */}
+        {/* Plan: small text indicator (Creators Wanted, Brand Kit, Install and TikTok Ads live in the sidebar/Settings) */}
         {plan && currentView !== "home" && (
           <button
             id="btn-header-plan"
             onClick={onOpenPricing}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs font-semibold transition-all cursor-pointer ${
-              plan.id === "free"
-                ? "bg-[#171C27] hover:bg-[#1C222E] text-amber-300 border-amber-500/30"
-                : "bg-[#171C27] hover:bg-[#1C222E] text-[#16D9F5] border-[#16D9F5]/30"
-            }`}
+            className="hidden sm:flex items-center gap-1 text-[11px] text-gray-400 hover:text-white transition-colors"
             title="Manage subscription and usage limits"
           >
-            <Crown className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">{plan.id === "free" ? "Free" : `${plan.name} plan`}</span>
-            {plan.id === "free" && (
-              <span className="text-[10px] px-1.5 py-0.2 bg-amber-400 text-black font-bold rounded">Upgrade</span>
-            )}
+            <Crown className="w-3 h-3 text-amber-400" />
+            <span>{plan.id === "free" ? "Free" : plan.name}</span>
+            {plan.id === "free" && <span className="text-amber-300 font-semibold">· Upgrade</span>}
           </button>
         )}
 
-        {/* Brand Kit Quick Badge (Hidden on homepage) */}
-        {currentView !== "home" && !isFocusedView && (
-          <button
-            id="btn-quick-brand-kit"
-            onClick={onOpenBrandKit}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-xs font-medium text-[#F7F8FA] transition-colors"
-            title={`Active Brand Kit: ${brandKit.name}`}
-          >
-            <Palette className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">{brandKit.name.split(" ")[0]} Kit</span>
-            <span
-              className="w-2.5 h-2.5 rounded-full border border-white/20"
-              style={{ backgroundColor: brandKit.colors.primary }}
-            />
-          </button>
-        )}
-
-        {/* Install PWA Button (Desktop & Tablet; Mobile uses the dedicated Install row in Account menu) */}
-        {canInstall && onOpenPWAInstall && !isFocusedView && (
-          <button
-            id="btn-header-install-pwa"
-            onClick={onOpenPWAInstall}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] rounded-lg bg-[#168CFF]/15 hover:bg-[#168CFF]/25 border border-[#168CFF]/40 text-xs font-semibold text-[#16D9F5] transition-all cursor-pointer active:scale-95"
-            title="Install ClipFlow as a Progressive Web App"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span className="text-[11px]">Install</span>
-          </button>
-        )}
-
-        {/* Send to TikTok Ads Manager Button */}
-        {onOpenTikTokAds && !isFocusedView && (
-          <button
-            id="btn-header-tiktok-ads"
-            onClick={onOpenTikTokAds}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#FE2C55]/15 hover:bg-[#FE2C55]/25 border border-[#FE2C55]/30 text-xs font-semibold text-white transition-all cursor-pointer"
-            title="Send finished video creatives directly to TikTok Ads Manager"
-          >
-            <Share2 className="w-3.5 h-3.5 text-[#FE2C55]" />
-            <span className="hidden md:inline">TikTok Ads</span>
-          </button>
-        )}
-
-        {/* Quick Upload Button (Desktop/Tablet; Mobile uses bottom nav Create or editor Add Media) */}
-        {!isFocusedView && (
+        {/* One primary action per page: Import on most pages, Export in the editor */}
+        {!isFocusedView && currentView !== "editor" && (
         <button
           id="btn-header-upload"
           onClick={onQuickUpload}
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-xs font-medium text-[#F7F8FA] transition-colors"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#171C27] hover:bg-[#1C222E] border border-[#272D3A] text-[11px] font-medium text-[#F7F8FA] transition-colors"
         >
           <CloudUpload className="w-3.5 h-3.5 text-[#16D9F5]" />
           <span className="hidden sm:inline">{t("header.importMedia")}</span>
@@ -320,13 +231,13 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Export / Render - Primary Action with ClipFlow Gradient */}
         {/* Hidden on mobile while the mobile editor is active because MobileEditorView has its own dedicated Export button in its top bar */}
-        {!isFocusedView && (
+        {currentView === "editor" && (
         <button
           id="btn-header-export"
           onClick={onOpenExportModal}
           className={`${
             currentView === "editor" ? "hidden md:flex" : "flex"
-          } items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-lg btn-clipflow-primary text-xs font-bold`}
+          } items-center gap-1.5 px-3 py-1 rounded-lg btn-clipflow-primary text-xs font-bold`}
         >
           <Download className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">{t("header.export916")}</span>
@@ -342,7 +253,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="btn-header-account"
             onClick={onOpenAuthModal}
-            className="flex items-center justify-center min-h-[44px] min-w-[44px] p-0.5 rounded-full hover:ring-2 hover:ring-[#16D9F5]/60 transition-all cursor-pointer flex-shrink-0"
+            className="flex items-center justify-center p-0.5 rounded-full hover:ring-2 hover:ring-[#16D9F5]/60 transition-all cursor-pointer flex-shrink-0"
             title={currentUser ? `Signed in as ${currentUser.name} (${currentUser.email})` : "Sign In to ClipFlow"}
             aria-label="User Account Profile"
           >

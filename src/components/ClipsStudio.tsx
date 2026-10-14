@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { PlatformChip } from "./PlatformChip";
 import {
   UploadCloud,
   Link2,
@@ -199,9 +200,20 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
     return connected.length > 0 ? Array.from(new Set(connected)) : (["tiktok", "instagram", "youtube"] as SocialPlatform[]);
   }, [connectedAccounts]);
 
+  // Per-day destinations (defaults to the connected platforms).
+  const PLAN_PLATFORMS: SocialPlatform[] = ["tiktok", "instagram", "youtube", "facebook"];
+  const [dayPlatforms, setDayPlatforms] = useState<Record<number, SocialPlatform[]>>({});
+  const platformsForDay = (i: number) => dayPlatforms[i] || weekPlatforms;
+  const toggleDayPlatform = (i: number, p: SocialPlatform) =>
+    setDayPlatforms((prev) => {
+      const cur = prev[i] || weekPlatforms;
+      const next = cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p];
+      return { ...prev, [i]: next };
+    });
+
   const handleScheduleWeek = () => {
     if (!onScheduleWeeklyPosts || weekSlots.length === 0) return;
-    const posts: ScheduledPost[] = weekSlots.map((s) => {
+    const posts: ScheduledPost[] = weekSlots.map((s, i) => {
       const [hh, mm] = s.time.split(":").map(Number);
       const when = new Date(s.date);
       when.setHours(hh || 12, mm || 0, 0, 0);
@@ -212,7 +224,7 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
         title: s.clip.title,
         videoUrl: clipSrc(s.clip),
         thumbnailUrl: s.clip.thumbnailUrl,
-        platforms: weekPlatforms,
+        platforms: platformsForDay(i),
         scheduledTime: when.toISOString(),
         status: autoPost ? "scheduled" : "draft",
         humanApproved: autoPost,
@@ -455,8 +467,17 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
                         onChange={(e) => setWeekTimes((prev) => prev.map((t, j) => (j === i ? e.target.value : t)))}
                         className="w-full bg-transparent border border-[#272D3A] rounded px-1 text-[10px]"
                       />
-                      <div className="truncate text-gray-400" title={weekPlatforms.join(", ")}>
-                        {weekPlatforms.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" · ")}
+                      <div className="flex flex-wrap gap-0.5" aria-label="Destinations">
+                        {Array.from(new Set([...PLAN_PLATFORMS, ...weekPlatforms])).map((p) => (
+                          <PlatformChip
+                            key={p}
+                            platform={p}
+                            size="xs"
+                            showLabel={false}
+                            selected={platformsForDay(i).includes(p)}
+                            onClick={() => toggleDayPlatform(i, p)}
+                          />
+                        ))}
                       </div>
                     </div>
                   ))}

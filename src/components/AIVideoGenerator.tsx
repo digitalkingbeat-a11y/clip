@@ -170,6 +170,10 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [shots, setShots] = useState<StoryboardShot[]>([]);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [costEstimate, setCostEstimate] = useState<number>(1.5);
+  // "veo" = real AI footage via Google Veo (costs credits); "preview" = free text-card preview.
+  const [renderMode, setRenderMode] = useState<"veo" | "preview">("preview");
+  const [veoConfig, setVeoConfig] = useState<{ available: boolean; creditsPerSecond: number; allowedDurations: number[] } | null>(null);
+  const [shotJobStatus, setShotJobStatus] = useState<Record<string, string>>({});
 
   // Generation & Pipeline Progress
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState<boolean>(false);
@@ -469,35 +473,88 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     setShots((prev) => prev.map((s) => (s.id === shotId ? { ...s, ...updates } : s)));
   };
 
+  // Veo: smallest allowed clip length that covers the scene (extra is trimmed at export).
+  const veoSecondsFor = (d: number) => {
+    const allowed = veoConfig?.allowedDurations?.length ? veoConfig.allowedDurations : [4, 6, 8];
+    return allowed.find((a) => a >= Math.ceil(d || 4)) || allowed[allowed.length - 1];
+  };
+  const veoCreditsForShots = (list: StoryboardShot[]) =>
+    list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 2), 0);
+
+  useEffect(() => {
+    fetch("/api/ai/veo/config")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          setVeoConfig(d);
+          if (d.available) setRenderMode("veo");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Submit a Veo job for one shot (server de-duplicates by shot + prompt) and poll until done.
+  const renderShotWithVeo = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string }> => {
+    const key = [shot.prompt, shot.duration, aspectRatio, tone].join("|");
+    const res = await fetch("/api/ai/veo/shots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shot, aspectRatio, style: tone, idempotencyKey: key }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || "Couldn't start the AI video job");
+    const jobId = data.job.id;
+    for (;;) {
+      const r = await fetch(`/api/ai/veo/jobs?ids=${encodeURIComponent(jobId)}`);
+      const d = await r.json();
+      const job = d.jobs?.[0];
+      if (!job) throw new Error("AI video job disappeared");
+      const label: Record<string, string> = {
+        queued: "Queued for Veo…",
+        submitting: "Sending to Veo…",
+        running: "Veo is generating (1–5 min)…",
+        downloading: "Saving to your Media Library…",
+      };
+      setShotJobStatus((m) => ({ ...m, [shot.id]: label[job.status] || job.status }));
+      if (job.status === "completed") return { videoUrl: job.videoUrl, thumbnailUrl: job.thumbnailUrl };
+      if (job.status === "failed") throw new Error(job.error || "AI video generation failed (credits refunded)");
+      await new Promise((ok) => setTimeout(ok, 5000));
+    }
+  };
+
+  const renderOneShot = async (shot: StoryboardShot) => {
+    if (renderMode === "veo") {
+      const out = await renderShotWithVeo(shot);
+      const version = { id: `ver_${shot.id}_veo_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
+      return { videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl, version };
+    }
+    const res = await fetch("/api/ai/render-shot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shot, aspectRatio }),
+    });
+    const data = await res.json();
+    if (!data.success || !data.videoUrl) throw new Error(data.error || "Rendering failed");
+    return { videoUrl: data.videoUrl, thumbnailUrl: data.thumbnailUrl, version: data.version };
+  };
+
   // Render Single Shot
   const handleRenderSingleShot = async (shot: StoryboardShot) => {
     handleUpdateShotField(shot.id, { status: "generating", error: undefined });
     try {
-      const res = await fetch("/api/ai/render-shot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shot, aspectRatio }),
-      });
-      const data = await res.json();
-      if (data.success && data.videoUrl) {
-        handleUpdateShotField(shot.id, {
-          status: "completed",
-          generatedVideoUrl: data.videoUrl,
-          generatedThumbnailUrl: data.thumbnailUrl,
-          versions: [data.version],
-          activeVersionIndex: 0,
-        });
-      } else {
-        handleUpdateShotField(shot.id, {
-          status: "failed",
-          error: data.error || "Rendering failed",
-        });
-      }
-    } catch (err: any) {
+      const out = await renderOneShot(shot);
       handleUpdateShotField(shot.id, {
-        status: "failed",
-        error: err.message,
-      });
+        status: "completed",
+        generatedVideoUrl: out.videoUrl,
+        generatedThumbnailUrl: out.thumbnailUrl,
+        versions: [out.version],
+        activeVersionIndex: 0,
+        renderMode,
+      } as any);
+    } catch (err: any) {
+      handleUpdateShotField(shot.id, { status: "failed", error: err.message });
+    } finally {
+      setShotJobStatus((m) => { const n = { ...m }; delete n[shot.id]; return n; });
     }
   };
 
@@ -507,32 +564,42 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     setErrorNotice(null);
     setIsRenderingVideo(true);
     setRenderProgress(10);
-    setRenderStepText("Synthesizing scene prompts with visual references...");
+    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : "Rendering quick preview cards…");
 
     try {
-      // Step 1: Render any unrendered shots sequentially
-      for (let i = 0; i < shots.length; i++) {
-        const s = shots[i];
-        setRenderProgress(20 + Math.round((i / shots.length) * 45));
-        setRenderStepText(`Rendering Shot ${s.shotNumber}/${shots.length}: "${s.title}"...`);
-        if (!s.generatedVideoUrl) {
-          const res = await fetch("/api/ai/render-shot", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ shot: s, aspectRatio }),
-          });
-          const data = await res.json();
-          if (data.success && data.videoUrl) {
-            s.generatedVideoUrl = data.videoUrl;
-            s.generatedThumbnailUrl = data.thumbnailUrl;
-            s.versions = [data.version];
+      // Re-render shots that are missing, or that were made in the other mode.
+      const todo = shots.filter((s) => !s.generatedVideoUrl || ((s as any).renderMode || "preview") !== renderMode);
+      let done = 0;
+      const results = await Promise.allSettled(
+        todo.map(async (s) => {
+          handleUpdateShotField(s.id, { status: "generating", error: undefined });
+          try {
+            const out = await renderOneShot(s);
+            s.generatedVideoUrl = out.videoUrl;
+            s.generatedThumbnailUrl = out.thumbnailUrl;
+            s.versions = [out.version];
             s.status = "completed";
+            (s as any).renderMode = renderMode;
+            handleUpdateShotField(s.id, { status: "completed", generatedVideoUrl: out.videoUrl, generatedThumbnailUrl: out.thumbnailUrl, versions: [out.version], activeVersionIndex: 0, renderMode } as any);
+          } catch (e: any) {
+            handleUpdateShotField(s.id, { status: "failed", error: e.message });
+            throw e;
+          } finally {
+            done++;
+            setRenderProgress(15 + Math.round((done / Math.max(1, todo.length)) * 60));
+            setRenderStepText(`${done}/${todo.length} shots finished…`);
           }
-        }
+        })
+      );
+      setShotJobStatus({});
+      const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      if (failed.length > 0) {
+        setErrorNotice(`${failed.length} shot(s) failed: ${failed[0].reason?.message || failed[0].reason}. Fix or retry them, then render again.`);
+        return;
       }
 
-      setRenderProgress(75);
-      setRenderStepText("Stitching shots, rendering kinetic transitions & audio master...");
+      setRenderProgress(80);
+      setRenderStepText("Stitching shots, fitting them to scene lengths and burning captions…");
 
       // Step 2: Combine all shots
       const combineRes = await fetch("/api/ai/combine-storyboard", {
@@ -779,7 +846,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         cameraMotion: s.cameraMovement,
         audioMood: s.audio.ambience,
         transition: s.transition,
-        mediaUrl: s.generatedVideoUrl || masterVideoUrl || "/storage/uploads/sample_test.mp4",
+        mediaUrl: s.generatedVideoUrl || "",
         mediaType: "video",
       })),
     };
@@ -1360,12 +1427,47 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 </button>
               </div>
 
+              {/* Render mode: real AI footage (Veo) or free quick preview */}
+              <div className="p-3 rounded-xl bg-[#11151E] border border-[#272D3A] space-y-2" id="render-mode-picker">
+                <span className="text-[11px] font-semibold text-gray-300">How should shots be made?</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => veoConfig?.available && setRenderMode("veo")}
+                    disabled={!veoConfig?.available}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${
+                      renderMode === "veo" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"
+                    } ${!veoConfig?.available ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    <span className="font-bold block">AI video (Veo)</span>
+                    <span className="text-[10px] text-gray-400">
+                      {veoConfig?.available
+                        ? `Real AI footage • ~${veoCreditsForShots(shots)} credits for ${shots.length} shots (${veoConfig.creditsPerSecond}/sec)`
+                        : "Not available right now"}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setRenderMode("preview")}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${
+                      renderMode === "preview" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"
+                    }`}
+                  >
+                    <span className="font-bold block">Quick preview (free)</span>
+                    <span className="text-[10px] text-gray-400">Text cards only, no AI footage</span>
+                  </button>
+                </div>
+                {renderMode === "veo" && (
+                  <p className="text-[10px] text-gray-500">
+                    Veo makes 4, 6 or 8 second clips; each is trimmed to its scene length. Failed shots are refunded.
+                  </p>
+                )}
+              </div>
+
               {/* Visual Sequence Preview Bar */}
               <div className="p-3 rounded-xl bg-[#11151E] border border-[#272D3A]">
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="font-semibold text-gray-300">Sequence Timeline Preview</span>
                   <span className="text-[#16D9F5] font-mono">
-                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • Est. Cost: ${costEstimate}
+                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" ? `~${veoCreditsForShots(shots)} credits` : "Free preview"}
                   </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1.5">
@@ -1641,7 +1743,15 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                           {/* Render Individual Shot Action */}
                           <div className="pt-2 flex items-center justify-between">
                             <span className="text-[10px] text-gray-400">
-                              {shot.status === "completed" ? "✓ Shot Rendered" : "Ready to render"}
+                              {shot.status === "generating"
+                                ? shotJobStatus[shot.id] || "Working…"
+                                : shot.status === "failed"
+                                ? `✕ ${shot.error || "Failed"}`
+                                : shot.status === "completed"
+                                ? (shot as any).renderMode === "veo"
+                                  ? "✓ AI video (Veo)"
+                                  : "✓ Quick preview (text card)"
+                                : "Ready to render"}
                             </span>
                             <button
                               onClick={() => handleRenderSingleShot(shot)}
@@ -1649,7 +1759,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                               className="px-3 py-1.5 rounded-lg bg-[#168CFF]/20 text-[#16D9F5] hover:bg-[#168CFF] hover:text-white border border-[#168CFF]/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
                             >
                               <Play className={`w-3 h-3 ${shot.status === "generating" ? "animate-spin" : ""}`} />
-                              <span>{shot.status === "generating" ? "Rendering Shot..." : "Render Shot Only"}</span>
+                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 2)} credits)` : "Quick preview"}</span>
                             </button>
                           </div>
                         </div>
