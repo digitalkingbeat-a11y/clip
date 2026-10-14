@@ -23,6 +23,8 @@ import { TikTokLiveView } from "./components/TikTokLiveView";
 import { ScriptsView } from "./components/ScriptsView";
 import { TikTokAdsModal } from "./components/TikTokAdsModal";
 import { AuthModal } from "./components/AuthModal";
+import { LandingPage } from "./components/LandingPage";
+import { LegalPage, LegalPageId } from "./components/LegalPages";
 import { ConnectorsAndAddonView } from "./components/ConnectorsAndAddonView";
 import { AffiliateDashboard } from "./components/AffiliateDashboard";
 import { PodcastStudioView } from "./components/PodcastStudioView";
@@ -70,6 +72,14 @@ import { PWAInstallModal } from "./components/PWAInstallModal";
 import { OfflineNotice } from "./components/OfflineNotice";
 import { usePWAInstall } from "./hooks/usePWAInstall";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
+
+const DEMO_USER: UserProfile = {
+  id: "usr_creator_01",
+  email: "alex.rivera@clipflow.video",
+  name: "Alex Rivera",
+  avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
+  planId: "creator",
+};
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>("home");
@@ -312,14 +322,17 @@ export default function App() {
         return JSON.parse(savedUser);
       }
     } catch (e) {}
-    return {
-      id: "usr_creator_01",
-      email: "alex.rivera@clipflow.video",
-      name: "Alex Rivera",
-      avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
-      planId: "creator",
-    };
+    // Signed-out visitors see the public landing page unless they chose "Try the demo"
+    if (localStorage.getItem("clipflow_demo_mode") === "1") return DEMO_USER;
+    return null;
   });
+  const [authModalMode, setAuthModalMode] = useState<"signin" | "signup">("signin");
+  const [legalPage, setLegalPage] = useState<LegalPageId | null>(null);
+  const openLegal = (page: LegalPageId) => setLegalPage(page);
+  const enterDemo = () => {
+    localStorage.setItem("clipflow_demo_mode", "1");
+    setCurrentUser(DEMO_USER);
+  };
 
   // Admin flag comes only from the server (/api/auth/me checks ADMIN_EMAILS)
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
@@ -1079,6 +1092,39 @@ export default function App() {
     }
   };
 
+  const authModalEl = (
+    <AuthModal
+      isOpen={isAuthModalOpen}
+      onClose={() => setIsAuthModalOpen(false)}
+      currentUser={currentUser}
+      initialMode={authModalMode}
+      onUserUpdate={(u) => {
+        if (u) localStorage.removeItem("clipflow_demo_mode");
+        setCurrentUser(u);
+      }}
+    />
+  );
+
+  if (legalPage) {
+    return <LegalPage page={legalPage} onBack={() => setLegalPage(null)} />;
+  }
+
+  if (!currentUser) {
+    return (
+      <>
+        <LandingPage
+          plans={plans}
+          creditPacks={creditPacks}
+          onSignUp={() => { setAuthModalMode("signup"); setIsAuthModalOpen(true); }}
+          onLogIn={() => { setAuthModalMode("signin"); setIsAuthModalOpen(true); }}
+          onTryDemo={enterDemo}
+          onOpenLegal={openLegal}
+        />
+        {authModalEl}
+      </>
+    );
+  }
+
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] h-screen w-screen overflow-hidden bg-[#080A0F] text-[#F7F8FA] font-sans antialiased select-none">
       {/* Real-time Offline Connectivity Toast Banner */}
@@ -1087,6 +1133,7 @@ export default function App() {
       {/* Persistent Left Navigation Sidebar (Desktop only; hidden in Editor) */}
       {currentView !== "editor" && !isMonitorMode && (
         <Sidebar
+          onOpenLegal={openLegal}
           isAdmin={isAdmin}
           currentView={currentView}
           onSelectView={(v) => {
@@ -1111,6 +1158,7 @@ export default function App() {
             onClick={() => setIsMainNavOpen(false)}
           />
           <Sidebar
+            onOpenLegal={openLegal}
             isAdmin={isAdmin}
             currentView={currentView}
             onSelectView={(v) => {
@@ -1995,6 +2043,13 @@ export default function App() {
                   </p>
                 </div>
 
+                <div className="bg-[#11151E] border border-[#272D3A] p-5 rounded-xl flex flex-wrap gap-4 text-xs">
+                  <span className="font-bold text-white">Legal & support:</span>
+                  <button onClick={() => openLegal("privacy")} className="text-[#16D9F5] hover:underline cursor-pointer">Privacy Policy</button>
+                  <button onClick={() => openLegal("terms")} className="text-[#16D9F5] hover:underline cursor-pointer">Terms of Service</button>
+                  <button onClick={() => openLegal("contact")} className="text-[#16D9F5] hover:underline cursor-pointer">Contact</button>
+                </div>
+
                 <div className="bg-[#11151E] border border-[#272D3A] p-5 rounded-xl space-y-4 text-xs">
                   <div>
                     <span className="font-bold text-white block mb-1">Rendering Engine</span>
@@ -2091,12 +2146,7 @@ export default function App() {
         onClose={() => setIsPWAInstallModalOpen(false)}
       />
 
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={currentUser}
-        onUserUpdate={(u) => setCurrentUser(u)}
-      />
+      {authModalEl}
 
       <CreatorProgramModal
         isOpen={isCreatorProgramModalOpen}
