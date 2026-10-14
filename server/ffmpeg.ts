@@ -712,9 +712,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let inputPath = "";
         if (sc.sourceUrl) {
           const rawFilename = path.basename(sc.sourceUrl.split("?")[0]);
-          const potentialUpload = path.join(path.dirname(outRenderPath), "..", "uploads", rawFilename);
-          if (fs.existsSync(potentialUpload)) {
-            inputPath = potentialUpload;
+          // Timeline scenes can point at uploads or at shots rendered by AI Video (renders/).
+          const storageRoot = path.join(path.dirname(outRenderPath), "..");
+          for (const dir of ["uploads", "renders"]) {
+            const candidate = path.join(storageRoot, dir, rawFilename);
+            if (fs.existsSync(candidate)) {
+              inputPath = candidate;
+              break;
+            }
           }
         }
 
@@ -736,12 +741,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             segPath
           );
         } else {
-          // Generate synthetic video card with tone
+          // No source media: plain colour card with silent audio
           segArgs.push(
             "-f", "lavfi",
             "-i", `color=c=${chosenColor}:s=${targetW}x${targetH}:d=${segDuration.toFixed(3)}:r=30`,
             "-f", "lavfi",
-            "-i", `sine=frequency=${220 + i * 55}:duration=${segDuration.toFixed(3)}`,
+            "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", segDuration.toFixed(3),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             "-pix_fmt", "yuv420p",

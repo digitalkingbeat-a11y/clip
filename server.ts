@@ -1207,10 +1207,13 @@ app.post("/api/render-clip", async (req: any, res) => {
 
     const userId = currentUserId(req);
     const owned = (readDb().projects || []).find((p: any) => p.id === projectId && p.userId === userId);
-    if (!owned) return res.status(404).json({ success: false, error: "Project not found" });
+    // Timeline exports (e.g. a script sent from AI Video) carry their own scenes
+    // and don't need a saved project; store them under an "editor" project key.
+    const isSceneExport = Array.isArray(options?.scenes) && options.scenes.length > 0;
+    if (!owned && !isSceneExport) return res.status(404).json({ success: false, error: "Project not found" });
     const result = await pipelineManager.renderFinalVideo(
       clipId,
-      projectId,
+      owned ? projectId : "editor",
       captions || [],
       brandKit || {},
       options || {},
