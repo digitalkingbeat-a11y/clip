@@ -144,7 +144,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
       // 4. Server-Side FFmpeg Engine Gate
       try {
-        const sysRes = await fetch("/api/system-readiness");
+        const sysRes = await fetch("/api/render-status");
         const sysData = await sysRes.json();
         const ffmpegService = sysData?.services?.find((s: any) => s.name === "FFmpeg");
         if (ffmpegService && ffmpegService.status === "Connected") {

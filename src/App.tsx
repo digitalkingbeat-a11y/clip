@@ -321,10 +321,17 @@ export default function App() {
     };
   });
 
+  // Admin flag comes only from the server (/api/auth/me checks ADMIN_EMAILS)
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+
   // Fetch verified user session from backend if token exists
   useEffect(() => {
     const token = localStorage.getItem("clipflow_auth_token");
-    if (token) {
+    if (!token) {
+      setIsAdmin(false);
+      return;
+    }
+    {
       fetch("/api/auth/me", {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -334,12 +341,20 @@ export default function App() {
         .then((data) => {
           if (data.success && data.user) {
             setCurrentUser(data.user);
+            setIsAdmin(Boolean(data.isAdmin));
             localStorage.setItem("clipflow_user_profile", JSON.stringify(data.user));
           }
         })
         .catch((err) => console.warn("Could not verify session token:", err));
     }
-  }, []);
+  }, [currentUser?.id, currentUser?.email]);
+
+  // Redirect non-admins away from admin-only views
+  useEffect(() => {
+    if (!isAdmin && (currentView === "profitability" || currentView === "system_readiness")) {
+      setCurrentView("home");
+    }
+  }, [isAdmin, currentView]);
 
 
   // Media Library State (Persistent & Synchronized with Backend Vault)
@@ -428,7 +443,7 @@ export default function App() {
       const savedView = localStorage.getItem("clipflow_active_view");
       if (
         savedView &&
-        ["home", "ai_clips", "ai_video", "editor", "projects", "media", "pricing", "brand_kit", "calendar", "analytics", "system_readiness"].includes(savedView)
+        ["home", "ai_clips", "ai_video", "editor", "projects", "media", "pricing", "brand_kit", "calendar", "analytics"].includes(savedView)
       ) {
         setCurrentView(savedView as ViewMode);
       }
@@ -1072,6 +1087,7 @@ export default function App() {
       {/* Persistent Left Navigation Sidebar (Desktop only; hidden in Editor) */}
       {currentView !== "editor" && !isMonitorMode && (
         <Sidebar
+          isAdmin={isAdmin}
           currentView={currentView}
           onSelectView={(v) => {
             setIsMonitorMode(false);
@@ -1095,6 +1111,7 @@ export default function App() {
             onClick={() => setIsMainNavOpen(false)}
           />
           <Sidebar
+            isAdmin={isAdmin}
             currentView={currentView}
             onSelectView={(v) => {
               setIsMainNavOpen(false);
@@ -1915,7 +1932,7 @@ export default function App() {
             <AnalyticsView projects={projects} scheduledPosts={scheduledPosts} />
           )}
 
-          {currentView === "system_readiness" && <SystemReadinessView />}
+          {isAdmin && currentView === "system_readiness" && <SystemReadinessView />}
 
           {currentView === "pricing" && (
             <div className="flex-1 p-4 md:p-8 pb-[calc(env(safe-area-inset-bottom,0px)+80px)] md:pb-8 overflow-y-auto bg-[#080A0F]">
@@ -1933,7 +1950,7 @@ export default function App() {
             </div>
           )}
 
-          {currentView === "profitability" && (
+          {isAdmin && currentView === "profitability" && (
             <div className="flex-1 p-4 md:p-8 pb-[calc(env(safe-area-inset-bottom,0px)+80px)] md:pb-8 overflow-y-auto bg-[#080A0F]">
               <AdminProfitabilityDashboard />
             </div>
@@ -1995,6 +2012,7 @@ export default function App() {
 
         {/* Mobile Touch Bottom Navigation (Phones only) */}
         <MobileBottomNav
+          isAdmin={isAdmin}
           currentView={currentView}
           onSelectView={(v) => setCurrentView(v)}
           onQuickUpload={() => setIsUploadModalOpen(true)}

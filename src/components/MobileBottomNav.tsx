@@ -41,6 +41,7 @@ interface MobileBottomNavProps {
   canInstall?: boolean;
   currentUser?: UserProfile | null;
   onOpenAuthModal?: () => void;
+  isAdmin?: boolean;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -52,6 +53,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   canInstall = false,
   currentUser,
   onOpenAuthModal,
+  isAdmin = false,
 }) => {
   const [isCreateSheetOpen, setIsCreateSheetOpen] = useState(false);
   const [isAccountsSheetOpen, setIsAccountsSheetOpen] = useState(false);
@@ -661,6 +663,8 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               </button>
 
+              {isAdmin && (
+              <>
               <button
                 onClick={() => handleSelectViewAndClose("profitability")}
                 className="w-full p-3 rounded-xl bg-[#141824] hover:bg-[#1A2030] border border-[#232A3B] flex items-center justify-between text-white min-h-[48px]"
@@ -682,6 +686,8 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               </button>
+              </>
+              )}
             </div>
           </div>
         </div>

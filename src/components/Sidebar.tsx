@@ -45,6 +45,7 @@ interface SidebarProps {
   onOpenPricing?: () => void;
   onOpenBuyCredits?: () => void;
   onOpenCreatorProgram?: () => void;
+  isAdmin?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -59,6 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenPricing,
   onOpenBuyCredits,
   onOpenCreatorProgram,
+  isAdmin = false,
 }) => {
   const { t } = useLanguage();
 
@@ -194,9 +196,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
 
-        {/* Discreet Admin / Dev quick shortcuts (Hidden for normal users, reachable only via ?admin=1) & Language Switcher */}
+        {/* Discreet Admin / Dev quick shortcuts (Only shown to admins listed in ADMIN_EMAILS) & Language Switcher */}
         <div className="pt-2 px-2 border-t border-[#1C222E]/60 flex flex-col gap-2 text-[10px] text-[#9CA5B5]">
-          {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("admin") === "1" && (
+          {isAdmin && (
             <div className="flex items-center justify-between">
               <button
                 id="nav-btn-profitability"
