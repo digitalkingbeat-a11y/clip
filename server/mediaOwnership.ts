@@ -13,15 +13,23 @@ export function registerOwnedFile(filename: string, userId: string) {
   writeDb(db);
 }
 
+/**
+ * Files whose owner is known for certain: explicitly registered files, storage records
+ * and server-created media items. Earlier sources win.
+ */
+function knownOwners(db: any): Map<string, string> {
+  const map = new Map<string, string>();
+  const base = (u: any) => (typeof u === "string" && u ? path.basename(u.split("?")[0]) : "");
+  const set = (n: string, uid: any) => { if (n && uid && !map.has(n)) map.set(n, String(uid)); };
+  for (const [n, owner] of Object.entries(db.fileOwners || {})) set(n, owner);
+  for (const m of db.mediaRecords || []) set(m?.filename, m?.userId);
+  for (const m of db.media || []) if (m?.userId) { set(base(m.url), m.userId); set(base(m.thumbnail), m.userId); }
+  return map;
+}
+
 export function userOwnsFile(filename: string, userId: string, db: any = readDb()): boolean {
   if (!filename || !userId) return false;
-  const name = path.basename(filename);
-  const base = (u: any) => (typeof u === "string" ? path.basename(u.split("?")[0]) : "");
-  if (db.fileOwners?.[name] === userId) return true;
-  if ((db.media || []).some((m: any) => m.userId === userId && (base(m.url) === name || base(m.thumbnail) === name))) return true;
-  if ((db.mediaRecords || []).some((m: any) => m.userId === userId && m.filename === name)) return true;
-  if ((db.projects || []).some((p: any) => p.userId === userId && (base(p.sourceVideoUrl) === name || (p.clips || []).some((c: any) => `clip_916_${c.id}.mp4` === name)))) return true;
-  return false;
+  return ownedFileNames(userId, db).has(path.basename(filename));
 }
 
 /** Resolve a /storage/... or /api/media/... URL to an on-disk path the user owns, else "". */
@@ -36,4 +44,30 @@ export function resolveOwnedMediaPath(url: string | undefined, userId: string, d
     if (fs.existsSync(p)) return p;
   }
   return "";
+}
+
+/**
+ * Every file name (basename) under /storage the user owns: registered files, their media,
+ * storage records, project sources and clips, plus the thumbnails derived from those.
+ * A file with a known owner is only ever included for that owner, so nobody can claim
+ * someone else's file by pointing one of their own projects at it.
+ */
+export function ownedFileNames(userId: string, db: any = readDb()): Set<string> {
+  const out = new Set<string>();
+  if (!userId) return out;
+  const known = knownOwners(db);
+  const base = (u: any) => (typeof u === "string" && u ? path.basename(u.split("?")[0]) : "");
+  const add = (n: string) => { if (n && (!known.has(n) || known.get(n) === userId)) out.add(n); };
+  for (const [n, owner] of known) if (owner === userId) out.add(n);
+  for (const p of db.projects || []) {
+    if (p?.userId !== userId) continue;
+    add(base(p.sourceVideoUrl));
+    add(base(p.sourceThumbnail));
+    for (const c of p.clips || []) {
+      add(`clip_916_${c.id}.mp4`); add(`clip_raw_${c.id}.mp4`); add(`thumb_${c.id}.jpg`);
+    }
+  }
+  // Thumbnails are named after their video: "<video file>.jpg".
+  for (const n of Array.from(out)) add(`${n}.jpg`);
+  return out;
 }

@@ -40,7 +40,14 @@ import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService } from "./server/podcastService";
 import { stockFootageService, stockAvailable, STOCK_CONFIG } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
-import { registerOwnedFile, resolveOwnedMediaPath } from "./server/mediaOwnership";
+import { registerOwnedFile, resolveOwnedMediaPath, ownedFileNames } from "./server/mediaOwnership";
+import {
+  getStorageSigningSecret,
+  verifyStorageSignature,
+  canonicalStoragePath,
+  signPayload,
+  stripSignatures,
+} from "./server/signedStorage";
 
 
 const execFileAsync = promisify(execFile);
@@ -50,6 +57,8 @@ const PORT = Number(process.env.PORT) || 3000;
 
 // Initialize physical storage
 initStorage();
+// Make sure file links can be signed (generates STORAGE_SIGNING_SECRET into .env.local if missing).
+getStorageSigningSecret();
 
 app.use(
   express.json({
@@ -60,6 +69,14 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Clients send back the signed file links they were given; keep plain /storage/... paths
+// in the database and in everything the server-side pipeline reads.
+// (Webhooks verify against req.rawBody, which is captured before this runs.)
+app.use((req: any, res, next) => {
+  if (req.body && typeof req.body === "object") stripSignatures(req.body);
+  next();
+});
 
 // Universal CORS & Media Streaming Headers
 app.use((req, res, next) => {
@@ -154,20 +171,55 @@ const streamMediaFile = (filePath: string, req: express.Request, res: express.Re
   }
 };
 
-// Expose storage directory with HTTP 206 partial content range streaming
-app.use("/storage", (req, res, next) => {
-  const reqSubPath = decodeURIComponent(req.path.replace(/^\//, ""));
-  const safePath = path.normalize(path.join(STORAGE_DIRS.root, reqSubPath));
-
-  // Guard against path traversal
-  if (!safePath.startsWith(path.resolve(STORAGE_DIRS.root))) {
-    return res.status(403).json({ error: "Access denied." });
+// User files under /storage are only served with a valid, unexpired signed link
+// (?u=<owner>&e=<expiry>&s=<hmac>), because <video>/<img> tags can't send auth headers.
+// The signed owner can also fetch with their own Authorization header instead.
+function storageAccessDenied(res: express.Response, reason: string) {
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(403).json({
+    success: false,
+    error: reason === "expired" ? "This file link has expired. Reload to get a fresh one." : "Access denied.",
+    expired: reason === "expired",
+  });
+}
+async function bearerUserOwns(req: express.Request, fileName: string): Promise<boolean> {
+  const h = req.headers["authorization"];
+  const token = typeof h === "string" && h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (!token) return false;
+  try {
+    const user: any = await authService.getUserByToken(token);
+    return !!user?.id && ownedFileNames(String(user.id), readDb()).has(fileName);
+  } catch {
+    return false;
   }
-
-  if (fs.existsSync(safePath) && fs.statSync(safePath).isFile()) {
-    return streamMediaFile(safePath, req, res);
+}
+async function serveSignedStorageFile(storagePath: string, query: Record<string, any>, req: express.Request, res: express.Response) {
+  const sub = storagePath.replace(/^\/storage\//, "");
+  const root = path.resolve(STORAGE_DIRS.root);
+  const safePath = path.normalize(path.join(root, sub));
+  if (!sub || !safePath.startsWith(root + path.sep) || path.basename(safePath) === "db.json") {
+    return storageAccessDenied(res, "invalid");
   }
-  next();
+  const check = verifyStorageSignature(storagePath, query);
+  if (!check.ok && !(await bearerUserOwns(req, path.basename(safePath)))) {
+    return storageAccessDenied(res, check.reason);
+  }
+  if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
+    return res.status(404).json({ success: false, error: "Media file not found." });
+  }
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  return streamMediaFile(safePath, req, res);
+}
+
+app.use("/storage", async (req, res) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return res.status(405).end();
+  let sub = "";
+  try {
+    sub = decodeURIComponent(req.path.replace(/^\//, ""));
+  } catch {
+    return storageAccessDenied(res, "invalid");
+  }
+  return serveSignedStorageFile(`/storage/${sub}`, req.query as any, req, res);
 });
 
 // Expose sample-media directory with HTTP 206 partial content range streaming and CORS
@@ -187,39 +239,17 @@ app.use("/sample-media", (req, res, next) => {
   next();
 });
 
-// Dedicated streaming route for direct media streaming with optional authenticated/signed token check
+// Streaming by URL: ?url=<a signed /storage link>. Same rules as /storage.
 app.get("/api/media/stream", (req: any, res: any) => {
-  const requestedUrl = (req.query.url as string) || (req.query.path as string);
-  if (!requestedUrl) {
-    return res.status(400).json({ success: false, error: "Missing media url parameter." });
+  const requestedUrl = String((req.query.url as string) || (req.query.path as string) || "");
+  const storagePath = canonicalStoragePath(requestedUrl);
+  if (!storagePath) {
+    return res.status(400).json({ success: false, error: "Missing or invalid media url parameter." });
   }
-
-  let localTarget = "";
-  if (requestedUrl.startsWith("/storage/")) {
-    const sub = requestedUrl.replace(/^\/storage\//, "");
-    localTarget = path.join(STORAGE_DIRS.root, sub);
-  } else if (path.isAbsolute(requestedUrl) && fs.existsSync(requestedUrl)) {
-    localTarget = requestedUrl;
-  } else {
-    const filename = path.basename(requestedUrl.split("?")[0]);
-    // Check uploads, clips, renders
-    for (const d of [STORAGE_DIRS.uploads, STORAGE_DIRS.clips, STORAGE_DIRS.renders, STORAGE_DIRS.audio]) {
-      const cand = path.join(d, filename);
-      if (fs.existsSync(cand)) {
-        localTarget = cand;
-        break;
-      }
-    }
-  }
-
-  if (!localTarget || !fs.existsSync(localTarget)) {
-    return res.status(404).json({ success: false, error: "Media file not found for streaming." });
-  }
-
-  return streamMediaFile(localTarget, req, res);
+  const qs = new URLSearchParams(requestedUrl.split("?")[1] || "");
+  return serveSignedStorageFile(storagePath, Object.fromEntries(qs.entries()), req, res);
 });
 
-app.use("/storage", express.static(STORAGE_DIRS.root));
 app.use(express.static(path.join(process.cwd(), "public")));
 
 // Lazy initialize Gemini client
@@ -307,6 +337,27 @@ async function authenticateUser(req: any, res: any, next: any) {
 }
 
 app.use(authenticateUser);
+
+// Every file path in an API response goes out as a short-lived signed link, but only for
+// files the caller owns (others stay plain and get a 403). Podcast session media is
+// shared with the session's guest link, so podcast routes sign their own session files.
+app.use("/api", (req: any, res: any, next: any) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body: any) => {
+    try {
+      if (body && typeof body === "object") {
+        body = signPayload(body, {
+          userId: req.isAuthenticated ? String(req.user?.id || "") : "",
+          podcast: String(req.originalUrl || "").startsWith("/api/podcast/"),
+        });
+      }
+    } catch (e: any) {
+      console.warn("[signedStorage] response signing failed:", e?.message);
+    }
+    return originalJson(body);
+  };
+  next();
+});
 
 // Every /api route needs a signed-in user except these public ones
 // (auth, public pricing, webhooks, OAuth callbacks, media files, podcast guest links).
@@ -449,33 +500,21 @@ app.get("/api/auth/me", (req: any, res) => {
   res.json({ success: true, user: req.user, isAdmin: isAdminRequest(req) });
 });
 
-// Authorized Media Proxy / Streaming (Supports S3 and signed media tokens)
+// Legacy media URLs (/api/media/<dir>/<file>): same signed-link rules as /storage.
+// Stored links of this form are rewritten to signed /storage links in API responses.
 app.get("/api/media/:subDir/:filename", (req: any, res) => {
   const { subDir, filename } = req.params;
-  const token = req.query.token as string;
-
-  const validDirs: Record<string, string> = {
-    uploads: STORAGE_DIRS.uploads,
-    audio: STORAGE_DIRS.audio,
-    clips: STORAGE_DIRS.clips,
-    thumbnails: STORAGE_DIRS.thumbnails,
-    renders: STORAGE_DIRS.renders,
-  };
-
-  const targetDir = validDirs[subDir];
-  if (!targetDir) {
+  if (!["uploads", "audio", "clips", "thumbnails", "renders"].includes(subDir)) {
     return res.status(404).json({ error: "Invalid media category" });
   }
+  return serveSignedStorageFile(`/storage/${subDir}/${path.basename(filename)}`, req.query, req, res);
+});
 
-  const safeFilename = path.basename(filename);
-  const filePath = path.join(targetDir, safeFilename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "Media file not found on disk" });
-  }
-
-  // Stream authorized media file
-  res.sendFile(filePath);
+// Fresh signed links for files the signed-in user owns (the player calls this when a link expires).
+app.post("/api/storage/refresh", (req: any, res) => {
+  const urls: any[] = Array.isArray(req.body?.urls) ? req.body.urls.slice(0, 200) : [];
+  // Request bodies already had signatures stripped; signing happens in the response wrapper.
+  res.json({ success: true, urls: urls.map((u) => (typeof u === "string" ? canonicalStoragePath(u) : null)) });
 });
 
 // Presigned Direct Upload URL Endpoint
@@ -1033,6 +1072,10 @@ async function handleUploadedFiles(req: any, res: any) {
     db.projects.unshift(...createdProjects);
     db.jobs.unshift(...createdJobs);
     createdMediaItems.forEach((m: any) => (m.userId = currentUserId(req)));
+    if (!db.fileOwners) db.fileOwners = {};
+    for (const m of createdMediaItems) {
+      for (const u of [m.url, m.thumbnail]) if (typeof u === "string" && u) db.fileOwners[path.basename(u)] = currentUserId(req);
+    }
     db.media.unshift(...createdMediaItems);
     writeDb(db);
 
@@ -1219,6 +1262,7 @@ app.put("/api/projects/:id", (req: any, res) => {
     ...existing,
     ...req.body,
     id: existing.id,
+    userId: existing.userId,
     updatedAt: new Date().toISOString(),
   };
   writeDb(db);
