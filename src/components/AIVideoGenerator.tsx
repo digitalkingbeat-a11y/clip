@@ -170,8 +170,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [shots, setShots] = useState<StoryboardShot[]>([]);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [costEstimate, setCostEstimate] = useState<number>(1.5);
-  // "veo" = real AI footage via Google Veo (costs credits); "preview" = free text-card preview.
-  const [renderMode, setRenderMode] = useState<"veo" | "preview">("preview");
+  // "stock" = free Pexels stock footage (default); "veo" = Veo Lite AI footage (credits); "preview" = free text cards.
+  const [renderMode, setRenderMode] = useState<"stock" | "veo" | "preview">("stock");
+  const [stockNotice, setStockNotice] = useState<string | null>(null);
   const [veoConfig, setVeoConfig] = useState<{ available: boolean; creditsPerSecond: number; allowedDurations: number[] } | null>(null);
   const [shotJobStatus, setShotJobStatus] = useState<Record<string, string>>({});
 
@@ -479,7 +480,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     return allowed.find((a) => a >= Math.ceil(d || 4)) || allowed[allowed.length - 1];
   };
   const veoCreditsForShots = (list: StoryboardShot[]) =>
-    list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 2), 0);
+    list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 1), 0);
 
   useEffect(() => {
     fetch("/api/ai/veo/config")
@@ -487,7 +488,6 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
       .then((d) => {
         if (d.success) {
           setVeoConfig(d);
-          if (d.available) setRenderMode("veo");
         }
       })
       .catch(() => {});
@@ -522,7 +522,34 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     }
   };
 
-  const renderOneShot = async (shot: StoryboardShot) => {
+  // Free stock footage for one scene. Avoids clips already used by other scenes (and ones this
+  // scene already tried, for "Try another clip"). Server falls back to a Quick preview card.
+  const renderShotWithStock = async (shot: StoryboardShot, extraExclude: number[] = []) => {
+    const used = shots.filter((s) => s.id !== shot.id).map((s: any) => s.stockAttribution?.pexelsId).filter(Boolean);
+    const tried = ((shot as any).stockTried || []) as number[];
+    const res = await fetch("/api/ai/stock/shot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shot, aspectRatio, excludeIds: [...used, ...tried, ...extraExclude] }),
+    });
+    const data = await res.json();
+    if (!data.success || !data.videoUrl) throw new Error(data.error || "Stock footage failed");
+    if (data.fallback && data.notice) setStockNotice(data.notice);
+    const pexelsId = data.attribution?.pexelsId;
+    return {
+      videoUrl: data.videoUrl,
+      thumbnailUrl: data.thumbnailUrl,
+      version: data.version,
+      extra: {
+        stockAttribution: data.fallback ? undefined : data.attribution,
+        stockFallback: !!data.fallback,
+        stockTried: pexelsId ? Array.from(new Set([...tried, pexelsId])) : tried,
+      },
+    };
+  };
+
+  const renderOneShot = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string; version: any; extra?: any }> => {
+    if (renderMode === "stock") return renderShotWithStock(shot);
     if (renderMode === "veo") {
       const out = await renderShotWithVeo(shot);
       const version = { id: `ver_${shot.id}_veo_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
@@ -550,7 +577,29 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         versions: [out.version],
         activeVersionIndex: 0,
         renderMode,
+        stockAttribution: undefined,
+        stockFallback: false,
+        ...(out.extra || {}),
       } as any);
+    } catch (err: any) {
+      handleUpdateShotField(shot.id, { status: "failed", error: err.message });
+    } finally {
+      setShotJobStatus((m) => { const n = { ...m }; delete n[shot.id]; return n; });
+    }
+  };
+
+  // Swap the stock clip for one scene (free). Keeps the scene's text, picks a clip not used yet.
+  const handleTryAnotherClip = async (shot: StoryboardShot) => {
+    handleUpdateShotField(shot.id, { status: "generating", error: undefined });
+    setShotJobStatus((m) => ({ ...m, [shot.id]: "Finding another stock clip…" }));
+    try {
+      const out = await renderShotWithStock(shot);
+      handleUpdateShotField(shot.id, {
+        status: "completed", generatedVideoUrl: out.videoUrl, generatedThumbnailUrl: out.thumbnailUrl,
+        versions: [...(shot.versions || []), out.version], activeVersionIndex: (shot.versions || []).length,
+        renderMode: "stock", ...out.extra,
+      } as any);
+      setMasterVideoUrl(null as any);
     } catch (err: any) {
       handleUpdateShotField(shot.id, { status: "failed", error: err.message });
     } finally {
@@ -564,14 +613,22 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     setErrorNotice(null);
     setIsRenderingVideo(true);
     setRenderProgress(10);
-    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : "Rendering quick preview cards…");
+    setStockNotice(null);
+    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : renderMode === "stock" ? "Finding free stock footage for each scene…" : "Rendering quick preview cards…");
 
     try {
       // Re-render shots that are missing, or that were made in the other mode.
       const todo = shots.filter((s) => !s.generatedVideoUrl || ((s as any).renderMode || "preview") !== renderMode);
       let done = 0;
+      // Stock shots go one at a time so each scene can avoid clips the earlier scenes picked.
+      let chain: Promise<any> = Promise.resolve();
+      const serial = <T,>(fn: () => Promise<T>): Promise<T> => {
+        const p = chain.then(fn, fn);
+        chain = p.catch(() => {});
+        return p;
+      };
       const results = await Promise.allSettled(
-        todo.map(async (s) => {
+        todo.map((s) => (renderMode === "stock" ? (f: any) => serial(f) : (f: any) => f())(async () => {
           handleUpdateShotField(s.id, { status: "generating", error: undefined });
           try {
             const out = await renderOneShot(s);
@@ -580,7 +637,8 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
             s.versions = [out.version];
             s.status = "completed";
             (s as any).renderMode = renderMode;
-            handleUpdateShotField(s.id, { status: "completed", generatedVideoUrl: out.videoUrl, generatedThumbnailUrl: out.thumbnailUrl, versions: [out.version], activeVersionIndex: 0, renderMode } as any);
+            Object.assign(s as any, { stockAttribution: undefined, stockFallback: false, ...(out.extra || {}) });
+            handleUpdateShotField(s.id, { status: "completed", generatedVideoUrl: out.videoUrl, generatedThumbnailUrl: out.thumbnailUrl, versions: [out.version], activeVersionIndex: 0, renderMode, stockAttribution: undefined, stockFallback: false, ...(out.extra || {}) } as any);
           } catch (e: any) {
             handleUpdateShotField(s.id, { status: "failed", error: e.message });
             throw e;
@@ -589,7 +647,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
             setRenderProgress(15 + Math.round((done / Math.max(1, todo.length)) * 60));
             setRenderStepText(`${done}/${todo.length} shots finished…`);
           }
-        })
+        }))
       );
       setShotJobStatus({});
       const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
@@ -1427,38 +1485,50 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 </button>
               </div>
 
-              {/* Render mode: real AI footage (Veo) or free quick preview */}
+              {/* Render mode: free stock footage (default), Veo Lite AI footage (credits) or quick preview */}
               <div className="p-3 rounded-xl bg-[#11151E] border border-[#272D3A] space-y-2" id="render-mode-picker">
                 <span className="text-[11px] font-semibold text-gray-300">How should shots be made?</span>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    onClick={() => setRenderMode("stock")}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "stock" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"}`}
+                  >
+                    <span className="font-bold block">Stock footage (free)</span>
+                    <span className="text-[10px] text-gray-400">Real video clips from Pexels matched to each scene</span>
+                  </button>
                   <button
                     onClick={() => veoConfig?.available && setRenderMode("veo")}
                     disabled={!veoConfig?.available}
-                    className={`p-2 rounded-lg border text-left text-xs transition-all ${
-                      renderMode === "veo" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"
-                    } ${!veoConfig?.available ? "opacity-50 cursor-not-allowed" : ""}`}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "veo" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"} ${!veoConfig?.available ? "opacity-50 cursor-not-allowed" : ""}`}
                   >
-                    <span className="font-bold block">AI video (Veo)</span>
+                    <span className="font-bold block">AI video, Veo Lite (credits)</span>
                     <span className="text-[10px] text-gray-400">
                       {veoConfig?.available
-                        ? `Real AI footage • ~${veoCreditsForShots(shots)} credits for ${shots.length} shots (${veoConfig.creditsPerSecond}/sec)`
+                        ? `~${veoCreditsForShots(shots)} credits for ${shots.length} shots (${veoConfig.creditsPerSecond}/sec)`
                         : "Not available right now"}
                     </span>
                   </button>
                   <button
                     onClick={() => setRenderMode("preview")}
-                    className={`p-2 rounded-lg border text-left text-xs transition-all ${
-                      renderMode === "preview" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"
-                    }`}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "preview" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"}`}
                   >
-                    <span className="font-bold block">Quick preview (free)</span>
-                    <span className="text-[10px] text-gray-400">Text cards only, no AI footage</span>
+                    <span className="font-bold block">Quick preview</span>
+                    <span className="text-[10px] text-gray-400">Free text cards, no footage</span>
                   </button>
                 </div>
                 {renderMode === "veo" && (
                   <p className="text-[10px] text-gray-500">
                     Veo makes 4, 6 or 8 second clips; each is trimmed to its scene length. Failed shots are refunded.
                   </p>
+                )}
+                {renderMode === "stock" && (
+                  <p className="text-[10px] text-gray-500">
+                    0 credits. Clips are trimmed or looped to each scene. Don't like one? Use "Try another clip" on that scene.{" "}
+                    <a href="https://www.pexels.com" target="_blank" rel="noreferrer" className="underline">Videos provided by Pexels</a>
+                  </p>
+                )}
+                {stockNotice && (
+                  <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2 py-1.5">{stockNotice}</p>
                 )}
               </div>
 
@@ -1467,7 +1537,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="font-semibold text-gray-300">Sequence Timeline Preview</span>
                   <span className="text-[#16D9F5] font-mono">
-                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" ? `~${veoCreditsForShots(shots)} credits` : "Free preview"}
+                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" ? `~${veoCreditsForShots(shots)} credits` : renderMode === "stock" ? "Free stock footage" : "Free preview"}
                   </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1.5">
@@ -1750,17 +1820,36 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                                 : shot.status === "completed"
                                 ? (shot as any).renderMode === "veo"
                                   ? "✓ AI video (Veo)"
+                                  : (shot as any).stockAttribution
+                                  ? "✓ Stock footage"
+                                  : (shot as any).stockFallback
+                                  ? "⚠ No stock clip, used a Quick preview card"
                                   : "✓ Quick preview (text card)"
                                 : "Ready to render"}
+                              {(shot as any).stockAttribution && (
+                                <a href={(shot as any).stockAttribution.pageUrl} target="_blank" rel="noreferrer" className="block underline text-gray-500">
+                                  Video by {(shot as any).stockAttribution.videographer} on Pexels
+                                </a>
+                              )}
                             </span>
+                            <div className="flex items-center gap-1.5">
+                            {(shot as any).renderMode === "stock" && shot.status === "completed" && (
+                              <button
+                                onClick={() => handleTryAnotherClip(shot)}
+                                className="px-2.5 py-1.5 rounded-lg border border-[#272D3A] text-gray-300 hover:border-[#16D9F5] text-xs font-semibold"
+                              >
+                                Try another clip
+                              </button>
+                            )}
                             <button
                               onClick={() => handleRenderSingleShot(shot)}
                               disabled={shot.status === "generating"}
                               className="px-3 py-1.5 rounded-lg bg-[#168CFF]/20 text-[#16D9F5] hover:bg-[#168CFF] hover:text-white border border-[#168CFF]/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
                             >
                               <Play className={`w-3 h-3 ${shot.status === "generating" ? "animate-spin" : ""}`} />
-                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 2)} credits)` : "Quick preview"}</span>
+                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 1)} credits)` : renderMode === "stock" ? "Find stock clip (free)" : "Quick preview"}</span>
                             </button>
+                            </div>
                           </div>
                         </div>
                       )}
@@ -1801,6 +1890,19 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                   Select any shot to prompt visual adjustments. Previous versions remain preserved so you can compare or revert.
                 </p>
               </div>
+
+              {shots.some((sh: any) => sh.stockAttribution) && (
+                <div className="p-2.5 rounded-lg bg-[#11151E] border border-[#272D3A] text-[10px] text-gray-400" id="stock-credits">
+                  <a href="https://www.pexels.com" target="_blank" rel="noreferrer" className="font-semibold text-gray-300 underline">Videos provided by Pexels</a>
+                  {" • "}
+                  {Array.from(new Map(shots.filter((sh: any) => sh.stockAttribution).map((sh: any) => [sh.stockAttribution.videographer, sh.stockAttribution])).values()).map((a: any, i: number) => (
+                    <span key={a.pexelsId}>
+                      {i > 0 && ", "}
+                      <a href={a.videographerUrl} target="_blank" rel="noreferrer" className="underline">{a.videographer}</a>
+                    </span>
+                  ))}
+                </div>
+              )}
 
               {/* Prompt-Based VFX Editing Box */}
               <div className="p-3.5 rounded-xl bg-[#11151E] border border-[#16D9F5]/40 space-y-3">
