@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { STORAGE_DIRS, readDb, writeDb } from "./storage";
+import { signStoragePath } from "./signedStorage";
 
 export interface StoredMediaMetadata {
   id: string;
@@ -115,9 +116,10 @@ export class StorageService {
       );
     } else {
       // Local S3-compatible fallback: generate secure signed URL with token
-      const token = this.generateLocalSignedToken(objectKey, userId);
+      // Local storage: keep the plain path; API responses turn it into a short-lived
+      // signed /storage link for the owner (see server/signedStorage.ts).
       const subDir = this.getSubDirForMediaType(mediaType);
-      signedUrl = `/api/media/${subDir}/${filename}?token=${token}`;
+      signedUrl = `/storage/${subDir}/${filename}`;
     }
 
     const metadata: StoredMediaMetadata = {
@@ -156,14 +158,13 @@ export class StorageService {
       );
     }
 
-    // Local signed URL fallback
-    const token = this.generateLocalSignedToken(objectKey, userId);
+    // Local fallback: a signed /storage link for the owner
     const db = readDb();
     const media = db.mediaRecords?.find((m: StoredMediaMetadata) => m.objectKey === objectKey);
     const filename = media?.filename || path.basename(objectKey);
     const subDir = media ? this.getSubDirForMediaType(media.mediaType) : "uploads";
 
-    return `/api/media/${subDir}/${filename}?token=${token}`;
+    return signStoragePath(`/storage/${subDir}/${filename}`, userId, expiresInSeconds);
   }
 
   /**

@@ -5,6 +5,7 @@ import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LanguageProvider } from './i18n/LanguageContext';
 import './index.css';
+import { installSignedMediaRecovery } from './utils/signedMedia';
 
 // Attach the signed-in user's session token to same-origin API calls so the
 // server returns that user's own data (credits, usage) instead of the demo sandbox.
@@ -15,7 +16,10 @@ if (typeof window !== 'undefined' && !(window as any).__clipflowAuthFetch) {
     try {
       const token = localStorage.getItem('clipflow_auth_token');
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      const isApi = url.startsWith('/api/') || url.startsWith(`${window.location.origin}/api/`);
+      const path = url.startsWith(window.location.origin) ? url.slice(window.location.origin.length) : url;
+      // /storage files also accept the owner's session token, so fetch() keeps working
+      // even after a signed link has expired.
+      const isApi = path.startsWith('/api/') || path.startsWith('/storage/');
       if (token && isApi) {
         const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
         if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
@@ -27,6 +31,8 @@ if (typeof window !== 'undefined' && !(window as any).__clipflowAuthFetch) {
     return originalFetch(input, init);
   };
 }
+
+installSignedMediaRecovery();
 
 // Register service worker safely for PWA compliance and offline caching
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
