@@ -170,9 +170,10 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [shots, setShots] = useState<StoryboardShot[]>([]);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [costEstimate, setCostEstimate] = useState<number>(1.5);
-  // "stock" = free Pexels stock footage (default); "veo" = Veo Lite AI footage (credits); "preview" = free text cards.
+  // "stock" = free stock footage from Pixabay or Pexels (default); "veo" = Veo Lite AI footage (credits); "preview" = free text cards.
   const [renderMode, setRenderMode] = useState<"stock" | "veo" | "preview">("stock");
   const [stockNotice, setStockNotice] = useState<string | null>(null);
+  const [stockConfig, setStockConfig] = useState<{ available: boolean; provider: "pixabay" | "pexels" | null; creditLine: string | null; creditUrl: string | null } | null>(null);
   const [veoConfig, setVeoConfig] = useState<{ available: boolean; creditsPerSecond: number; allowedDurations: number[] } | null>(null);
   const [shotJobStatus, setShotJobStatus] = useState<Record<string, string>>({});
 
@@ -483,6 +484,13 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 1), 0);
 
   useEffect(() => {
+    fetch("/api/ai/stock/config")
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setStockConfig(d); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     fetch("/api/ai/veo/config")
       .then((r) => r.json())
       .then((d) => {
@@ -524,9 +532,10 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
   // Free stock footage for one scene. Avoids clips already used by other scenes (and ones this
   // scene already tried, for "Try another clip"). Server falls back to a Quick preview card.
-  const renderShotWithStock = async (shot: StoryboardShot, extraExclude: number[] = []) => {
-    const used = shots.filter((s) => s.id !== shot.id).map((s: any) => s.stockAttribution?.pexelsId).filter(Boolean);
-    const tried = ((shot as any).stockTried || []) as number[];
+  const renderShotWithStock = async (shot: StoryboardShot, extraExclude: Array<string | number> = []) => {
+    const stockIdOf = (a: any) => a?.stockId || (a?.pexelsId ? `pexels:${a.pexelsId}` : null);
+    const used = shots.filter((s) => s.id !== shot.id).map((s: any) => stockIdOf(s.stockAttribution)).filter(Boolean);
+    const tried = ((shot as any).stockTried || []) as Array<string | number>;
     const res = await fetch("/api/ai/stock/shot", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -535,7 +544,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     const data = await res.json();
     if (!data.success || !data.videoUrl) throw new Error(data.error || "Stock footage failed");
     if (data.fallback && data.notice) setStockNotice(data.notice);
-    const pexelsId = data.attribution?.pexelsId;
+    const stockId = data.fallback ? null : stockIdOf(data.attribution);
     return {
       videoUrl: data.videoUrl,
       thumbnailUrl: data.thumbnailUrl,
@@ -543,7 +552,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
       extra: {
         stockAttribution: data.fallback ? undefined : data.attribution,
         stockFallback: !!data.fallback,
-        stockTried: pexelsId ? Array.from(new Set([...tried, pexelsId])) : tried,
+        stockTried: stockId ? Array.from(new Set([...tried, stockId])) : tried,
       },
     };
   };
@@ -1494,7 +1503,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "stock" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"}`}
                   >
                     <span className="font-bold block">Stock footage (free)</span>
-                    <span className="text-[10px] text-gray-400">Real video clips from Pexels matched to each scene</span>
+                    <span className="text-[10px] text-gray-400">Real video clips from Pixabay or Pexels matched to each scene</span>
                   </button>
                   <button
                     onClick={() => veoConfig?.available && setRenderMode("veo")}
@@ -1524,7 +1533,12 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 {renderMode === "stock" && (
                   <p className="text-[10px] text-gray-500">
                     0 credits. Clips are trimmed or looped to each scene. Don't like one? Use "Try another clip" on that scene.{" "}
-                    <a href="https://www.pexels.com" target="_blank" rel="noreferrer" className="underline">Videos provided by Pexels</a>
+                    {stockConfig?.creditUrl && (
+                      <a href={stockConfig.creditUrl} target="_blank" rel="noreferrer" className="underline">{stockConfig.creditLine}</a>
+                    )}
+                    {stockConfig && !stockConfig.available && (
+                      <span className="text-amber-300">Not set up yet (needs a Pixabay or Pexels API key), so scenes use Quick preview cards.</span>
+                    )}
                   </p>
                 )}
                 {stockNotice && (
@@ -1828,7 +1842,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                                 : "Ready to render"}
                               {(shot as any).stockAttribution && (
                                 <a href={(shot as any).stockAttribution.pageUrl} target="_blank" rel="noreferrer" className="block underline text-gray-500">
-                                  Video by {(shot as any).stockAttribution.videographer} on Pexels
+                                  {(shot as any).stockAttribution.creditLine || `Video by ${(shot as any).stockAttribution.videographer} on Pexels`}
                                 </a>
                               )}
                             </span>
@@ -1893,12 +1907,21 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
               {shots.some((sh: any) => sh.stockAttribution) && (
                 <div className="p-2.5 rounded-lg bg-[#11151E] border border-[#272D3A] text-[10px] text-gray-400" id="stock-credits">
-                  <a href="https://www.pexels.com" target="_blank" rel="noreferrer" className="font-semibold text-gray-300 underline">Videos provided by Pexels</a>
+                  {(["pixabay", "pexels"] as const)
+                    .filter((p) => shots.some((sh: any) => (sh.stockAttribution?.provider || "pexels") === p && sh.stockAttribution))
+                    .map((p, pi) => (
+                      <span key={p}>
+                        {pi > 0 && " • "}
+                        <a href={p === "pixabay" ? "https://pixabay.com" : "https://www.pexels.com"} target="_blank" rel="noreferrer" className="font-semibold text-gray-300 underline">
+                          {p === "pixabay" ? "Videos from Pixabay" : "Videos provided by Pexels"}
+                        </a>
+                      </span>
+                    ))}
                   {" • "}
-                  {Array.from(new Map(shots.filter((sh: any) => sh.stockAttribution).map((sh: any) => [sh.stockAttribution.videographer, sh.stockAttribution])).values()).map((a: any, i: number) => (
-                    <span key={a.pexelsId}>
+                  {Array.from(new Map(shots.filter((sh: any) => sh.stockAttribution).map((sh: any) => [sh.stockAttribution.stockId || sh.stockAttribution.pexelsId, sh.stockAttribution])).values()).map((a: any, i: number) => (
+                    <span key={a.stockId || a.pexelsId}>
                       {i > 0 && ", "}
-                      <a href={a.videographerUrl} target="_blank" rel="noreferrer" className="underline">{a.videographer}</a>
+                      <a href={a.pageUrl || a.videographerUrl} target="_blank" rel="noreferrer" className="underline" title={a.creditLine}>{a.videographer}</a>
                     </span>
                   ))}
                 </div>
