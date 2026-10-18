@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import JSZip from "jszip";
 import { TimelineItem } from "../types";
-import { createSyntheticWav, StemMetadata } from "../utils/wavHelper";
+import { StemMetadata } from "../utils/wavHelper";
 
 interface DAWBridgeModalProps {
   isOpen: boolean;
@@ -71,20 +71,12 @@ export const DAWBridgeModal: React.FC<DAWBridgeModalProps> = ({
   const [detectedMix, setDetectedMix] = useState<{
     available: boolean;
     fileName: string;
-    lufs: number;
-    peakDb: number;
+    lufs: number | null;
+    peakDb: number | null;
     duration: number;
     timestamp: string;
     url: string;
-  } | null>({
-    available: true,
-    fileName: `${projectName.replace(/\s+/g, "_")}_FL_MasterMix_Final.wav`,
-    lufs: -14.2,
-    peakDb: -0.8,
-    duration: Math.min(totalDuration, 30),
-    timestamp: "Just now (Detected in Mix_Renders/)",
-    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-  });
+  } | null>(null);
 
   const [isPlayingAudition, setIsPlayingAudition] = useState<boolean>(false);
   const auditionAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -167,12 +159,8 @@ export const DAWBridgeModal: React.FC<DAWBridgeModalProps> = ({
 
       setExportProgress(50);
 
-      // Synthesize valid PCM WAV files and add to zip
-      for (const stem of stemList) {
-        const wavBuffer = createSyntheticWav(totalDuration, sampleRate, 440, stem.type);
-        folder?.file(stem.name, wavBuffer);
-      }
-
+      // Audio stems aren't rendered on the server yet. The package carries the project settings and
+      // instructions only; it never contains made-up test tones.
       setExportProgress(75);
 
       // Metadata JSON for FL Studio and other DAWs
@@ -187,13 +175,9 @@ export const DAWBridgeModal: React.FC<DAWBridgeModalProps> = ({
         sampleRate,
         bitDepth,
         fps,
-        markers: [
-          { name: "Intro / Hook", time: 0.0, timecode: "00:00:00:00" },
-          { name: "Scene 1 Climax", time: Number((totalDuration * 0.35).toFixed(2)), timecode: "00:00:05:00" },
-          { name: "Beat Drop", time: Number((totalDuration * 0.6).toFixed(2)), timecode: "00:00:09:00" },
-          { name: "Call To Action Outro", time: Number((totalDuration * 0.85).toFixed(2)), timecode: "00:00:12:20" },
-        ],
-        stems: stemList.map((s) => ({ fileName: s.name, trackType: s.type, description: s.desc })),
+        markers: [],
+        stems: [],
+        plannedStems: stemList.map((s) => ({ fileName: s.name, trackType: s.type, description: s.desc })),
         createdAt: new Date().toISOString(),
       };
 
@@ -213,7 +197,7 @@ Total Duration: ${totalDuration.toFixed(2)} seconds (${fps} FPS)
 HOW TO USE IN ${selectedDaw.toUpperCase()}:
 1. Open ${selectedDaw}.
 2. Set project tempo to ${bpm} BPM and sample rate to ${sampleRate} Hz.
-3. Drag the stem files from this folder into the Playlist / Audio Tracks.
+3. Export your audio from ClipFlow (audio stems are not included in this package yet) and drag it into the Playlist / Audio Tracks.
 4. Perform vocal tuning, mixing, beat production, sound design, and mastering.
 5. When finished, Export your master render (WAV or MP3) into:
    "${handoffFolderPath}Mix_Renders/"
@@ -262,8 +246,8 @@ Generated with ClipFlow DAW Bridge Engine.
     setDetectedMix({
       available: true,
       fileName: file.name,
-      lufs: -14.0,
-      peakDb: -0.5,
+      lufs: null,
+      peakDb: null,
       duration: totalDuration,
       timestamp: "Uploaded just now",
       url,
@@ -473,7 +457,7 @@ Generated with ClipFlow DAW Bridge Engine.
                 ) : (
                   <>
                     <Download className="w-3.5 h-3.5" />
-                    <span>Download {selectedDaw} Stem Package (.zip)</span>
+                    <span>Download {selectedDaw} Handoff Folder (.zip, no audio stems yet)</span>
                   </>
                 )}
               </button>
@@ -520,14 +504,16 @@ Generated with ClipFlow DAW Bridge Engine.
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 text-[10px] font-mono">
-                    <span className="bg-[#171C27] px-1.5 py-0.5 rounded text-emerald-300 border border-[#272D3A]">
-                      LUFS: {detectedMix.lufs}
-                    </span>
-                    <span className="bg-[#171C27] px-1.5 py-0.5 rounded text-white border border-[#272D3A]">
-                      Peak: {detectedMix.peakDb} dB
-                    </span>
-                  </div>
+                  {detectedMix.lufs !== null && detectedMix.peakDb !== null && (
+                    <div className="flex items-center gap-2 text-[10px] font-mono">
+                      <span className="bg-[#171C27] px-1.5 py-0.5 rounded text-emerald-300 border border-[#272D3A]">
+                        LUFS: {detectedMix.lufs}
+                      </span>
+                      <span className="bg-[#171C27] px-1.5 py-0.5 rounded text-white border border-[#272D3A]">
+                        Peak: {detectedMix.peakDb} dB
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Simulated Audio Waveform Bar */}

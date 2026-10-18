@@ -515,8 +515,6 @@ Output strict JSON object matching:
     }
 
     // No stock/sample footage: shots render as a plain preview card until a real video provider is connected.
-    const sampleSourceVideo = "";
-    const hasSampleSource = false;
 
     // Build FFmpeg command with fast video scaling and reframing
     let videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
@@ -529,72 +527,48 @@ Output strict JSON object matching:
     const ffmpegArgs: string[] = ["-y"];
     let tempSubtitleFile = "";
 
-    if (hasSampleSource) {
-      // Use real sample video clip, trimmed to duration and reframed
-      ffmpegArgs.push("-ss", "0", "-t", shotDuration.toFixed(2), "-i", sampleSourceVideo);
-      ffmpegArgs.push(
-        "-vf",
-        videoFilter,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "22",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        outRenderPath
-      );
-    } else {
-      // No video model connected: render a preview card that shows the shot's
-      // title and voiceover line (burned in via libass) over silent audio,
-      // instead of a blank frame with a test beep.
-      const cardLines = [shot.title, shot.audio?.dialogue || shot.onScreenText || ""]
-        .map((t) => String(t || "").replace(/[\r\n{}]+/g, " ").trim())
-        .filter(Boolean);
-      let cardFilter = "";
-      if (cardLines.length > 0) {
-        const subPath = outRenderPath.replace(/\.mp4$/, ".srt");
-        const end = new Date(shotDuration * 1000).toISOString().substring(11, 23).replace(".", ",");
-        fs.writeFileSync(subPath, `1\n00:00:00,000 --> ${end}\n${cardLines.join("\n")}\n`);
-        tempSubtitleFile = subPath;
-        const escaped = subPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
-        cardFilter = `subtitles='${escaped}':force_style='Fontsize=14,Alignment=10,MarginL=20,MarginR=20,Outline=1,Shadow=0,PrimaryColour=&H00FFFFFF'`;
-      }
-      ffmpegArgs.push(
-        "-f",
-        "lavfi",
-        "-i",
-        `color=c=0x11151e:s=${width}x${height}:d=${shotDuration}`,
-        "-f",
-        "lavfi",
-        "-i",
-        `anullsrc=r=44100:cl=stereo`,
-        "-t",
-        shotDuration.toFixed(2),
-        ...(cardFilter ? ["-vf", cardFilter] : []),
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "24",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-shortest",
-        outRenderPath
-      );
+    // No video model connected: render a preview card that shows the shot's
+    // title and voiceover line (burned in via libass) over silent audio,
+    // instead of a blank frame with a test beep.
+    const cardLines = [shot.title, shot.audio?.dialogue || shot.onScreenText || ""]
+      .map((t) => String(t || "").replace(/[\r\n{}]+/g, " ").trim())
+      .filter(Boolean);
+    let cardFilter = "";
+    if (cardLines.length > 0) {
+      const subPath = outRenderPath.replace(/\.mp4$/, ".srt");
+      const end = new Date(shotDuration * 1000).toISOString().substring(11, 23).replace(".", ",");
+      fs.writeFileSync(subPath, `1\n00:00:00,000 --> ${end}\n${cardLines.join("\n")}\n`);
+      tempSubtitleFile = subPath;
+      const escaped = subPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+      cardFilter = `subtitles='${escaped}':force_style='Fontsize=14,Alignment=10,MarginL=20,MarginR=20,Outline=1,Shadow=0,PrimaryColour=&H00FFFFFF'`;
     }
+    ffmpegArgs.push(
+      "-f",
+      "lavfi",
+      "-i",
+      `color=c=0x11151e:s=${width}x${height}:d=${shotDuration}`,
+      "-f",
+      "lavfi",
+      "-i",
+      `anullsrc=r=44100:cl=stereo`,
+      "-t",
+      shotDuration.toFixed(2),
+      ...(cardFilter ? ["-vf", cardFilter] : []),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-crf",
+      "24",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-shortest",
+      outRenderPath
+    );
 
     try {
       await execFileAsync(ffmpegService.getFFmpegPath(), ffmpegArgs);

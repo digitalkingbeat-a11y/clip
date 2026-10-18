@@ -31,6 +31,7 @@ import {
   LayoutTemplate,
 } from "lucide-react";
 import { ViewMode, UserProfile } from "../types";
+import { AVATAR_PLACEHOLDER } from "../utils/placeholders";
 
 interface MobileBottomNavProps {
   currentView: ViewMode;
@@ -434,7 +435,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                   <img
                     src={
                       currentUser?.avatarUrl ||
-                      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+                      AVATAR_PLACEHOLDER
                     }
                     alt={currentUser?.name || "User"}
                     className="w-full h-full object-cover rounded-full bg-[#0E121C]"

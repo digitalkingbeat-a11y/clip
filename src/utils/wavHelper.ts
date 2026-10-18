@@ -19,6 +19,8 @@ export interface StemMetadata {
     time: number;
     timecode: string;
   }>;
+  /** Stems the user asked for; not rendered yet. */
+  plannedStems?: Array<{ fileName: string; trackType: string; description: string }>;
   stems: Array<{
     fileName: string;
     trackType: string;

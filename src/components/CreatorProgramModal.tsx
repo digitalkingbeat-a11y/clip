@@ -62,7 +62,7 @@ export const CreatorProgramModal: React.FC<CreatorProgramModalProps> = ({ isOpen
     try {
       const applicationData = {
         channelName,
-        creatorEmail: creatorEmail || "creator@clipflow.video",
+        creatorEmail: creatorEmail || "",
         platform,
         channelUrl,
         audienceSize,

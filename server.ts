@@ -37,7 +37,7 @@ import { mcpConnectorService } from "./server/mcpConnectorService";
 import { affiliateService } from "./server/affiliateService";
 import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
-import { podcastService } from "./server/podcastService";
+import { podcastService, PodcastError } from "./server/podcastService";
 import { stockFootageService, stockAvailable, STOCK_CONFIG } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
 import { registerOwnedFile, resolveOwnedMediaPath, ownedFileNames } from "./server/mediaOwnership";
@@ -222,23 +222,6 @@ app.use("/storage", async (req, res) => {
   return serveSignedStorageFile(`/storage/${sub}`, req.query as any, req, res);
 });
 
-// Expose sample-media directory with HTTP 206 partial content range streaming and CORS
-app.use("/sample-media", (req, res, next) => {
-  const reqSubPath = decodeURIComponent(req.path.replace(/^\//, ""));
-  const sampleDir = path.resolve(process.cwd(), "public", "sample-media");
-  const safePath = path.normalize(path.join(sampleDir, reqSubPath));
-
-  // Guard against path traversal
-  if (!safePath.startsWith(sampleDir)) {
-    return res.status(403).json({ error: "Access denied." });
-  }
-
-  if (fs.existsSync(safePath) && fs.statSync(safePath).isFile()) {
-    return streamMediaFile(safePath, req, res);
-  }
-  next();
-});
-
 // Streaming by URL: ?url=<a signed /storage link>. Same rules as /storage.
 app.get("/api/media/stream", (req: any, res: any) => {
   const requestedUrl = String((req.query.url as string) || (req.query.path as string) || "");
@@ -367,7 +350,7 @@ const PUBLIC_API_PATTERNS: RegExp[] = [
   /^\/api\/billing\/(plans|credit-packs|webhook)$/,
   /^\/api\/oauth\/google\/callback$/,
   /^\/api\/integrations\/google\/calendar\/webhook$/,
-  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks|status))?$/,
+  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks))?$/,
 ];
 function isPublicApiRequest(req: any): boolean {
   const p = req.path || "";
@@ -540,10 +523,28 @@ const podcastChunkUpload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB per chunk
 });
 
-// 1. List podcast sessions
+function podcastErrorStatus(err: any, fallback: number): number {
+  return err instanceof PodcastError ? err.status : err?.message === "Session not found" ? 404 : fallback;
+}
+
+// Host-only actions: the session must exist and belong to the signed-in user.
+function requirePodcastHost(req: any, res: any): any | null {
+  const session = podcastService.getSession(req.params.id);
+  if (!session) {
+    res.status(404).json({ success: false, error: "Session not found" });
+    return null;
+  }
+  if (!podcastService.isHost(session, currentUserId(req))) {
+    res.status(403).json({ success: false, error: "Only the host can do that." });
+    return null;
+  }
+  return session;
+}
+
+// 1. List podcast sessions: only the ones the signed-in user hosts.
 app.get("/api/podcast/sessions", (req: any, res) => {
   try {
-    const sessions = podcastService.listSessions();
+    const sessions = podcastService.listSessions(currentUserId(req));
     res.json({ success: true, sessions });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -553,21 +554,21 @@ app.get("/api/podcast/sessions", (req: any, res) => {
 // 2. Create new podcast session
 app.post("/api/podcast/sessions", (req: any, res) => {
   try {
-    const { title, quality, audioFormat } = req.body;
+    const { title, quality, audioFormat } = req.body || {};
     const session = podcastService.createSession({
-      title: title || "Studio Interview Episode",
+      title: title || "Interview",
       hostId: currentUserId(req),
       hostName: req.user?.name || "Host",
-      quality: quality || "1080p",
-      audioFormat: audioFormat || "wav_uncompressed",
+      quality: ["720p", "1080p", "4k"].includes(quality) ? quality : "1080p",
+      audioFormat: audioFormat === "aac_high" ? "aac_high" : "wav_uncompressed",
     });
     res.json({ success: true, session });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(podcastErrorStatus(err, 500)).json({ success: false, error: err.message });
   }
 });
 
-// 3. Get single session details
+// 3. Get single session details (guest link: by session id or invite code)
 app.get("/api/podcast/sessions/:id", (req: any, res) => {
   try {
     const session = podcastService.getSession(req.params.id);
@@ -583,95 +584,92 @@ app.get("/api/podcast/sessions/:id", (req: any, res) => {
 // 4. Guest joins session (No ClipFlow account required)
 app.post("/api/podcast/sessions/:id/join", (req: any, res) => {
   try {
-    const { name, avatar } = req.body;
-    const result = podcastService.joinSession(req.params.id, {
-      name: name || "Guest",
-      avatar,
-    });
+    const { name } = req.body || {};
+    const result = podcastService.joinSession(req.params.id, { name: name || "Guest" });
     res.json({ success: true, ...result });
   } catch (err: any) {
-    res.status(400).json({ success: false, error: err.message });
+    res.status(podcastErrorStatus(err, 400)).json({ success: false, error: err.message });
   }
 });
 
-// 5. Update session status (e.g. countdown, recording, paused, completed)
+// 5. Update session status (host only)
 app.post("/api/podcast/sessions/:id/status", (req: any, res) => {
   try {
-    const { status, durationSec } = req.body;
-    const session = podcastService.updateStatus(req.params.id, status, durationSec);
-    res.json({ success: true, session });
+    const session = requirePodcastHost(req, res);
+    if (!session) return;
+    const { status, durationSec } = req.body || {};
+    if (!["setup", "waiting", "countdown", "recording", "paused", "completed"].includes(status)) {
+      return res.status(400).json({ success: false, error: "Invalid status." });
+    }
+    const updated = podcastService.updateStatus(session.id, status, typeof durationSec === "number" ? durationSec : undefined);
+    res.json({ success: true, session: updated });
   } catch (err: any) {
-    res.status(400).json({ success: false, error: err.message });
+    res.status(podcastErrorStatus(err, 400)).json({ success: false, error: err.message });
   }
 });
 
-// 6. Upload double-ender recording chunk (recoverable chunks)
+// 6. Upload double-ender recording chunk (recoverable chunks). Host or a joined guest;
+// the participant id must belong to this session and every path segment is validated.
 app.post("/api/podcast/sessions/:id/chunks", podcastChunkUpload.single("chunk"), (req: any, res) => {
   try {
-    const sessionId = req.params.id;
-    const { participantId, trackType, chunkIndex, ext } = req.body;
+    const sessionId = String(req.params.id || "");
+    const { participantId, trackType, chunkIndex, ext } = req.body || {};
 
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ success: false, error: "No chunk buffer provided" });
     }
+    const idx = typeof chunkIndex === "string" && /^\d{1,6}$/.test(chunkIndex) ? Number(chunkIndex) : NaN;
 
     const result = podcastService.saveChunk(
       sessionId,
-      participantId || "host",
-      trackType || "video",
-      Number(chunkIndex || 0),
+      String(participantId || ""),
+      String(trackType || "video"),
+      idx,
       req.file.buffer,
-      ext || ".webm"
+      ext ? String(ext) : ".webm"
     );
 
     res.json(result);
   } catch (err: any) {
-    console.error("Error saving chunk:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const status = podcastErrorStatus(err, 500);
+    if (status >= 500) console.error("Error saving chunk:", err);
+    res.status(status).json({ success: false, error: err.message });
   }
 });
 
-// 7. Finalize session: Assembles tracks, creates Multitrack Editor Project, Media Items, Transcript, AI clips
+// 7. Finalize session (host only). Multitrack assembly isn't built yet, so this answers 501
+// (also caught by NOT_YET_AVAILABLE above) instead of inventing tracks or clips.
 app.post("/api/podcast/sessions/:id/finalize", (req: any, res) => {
-  try {
-    const { liveSwitchEvents } = req.body;
-    const result = podcastService.finalizeSession(req.params.id, liveSwitchEvents);
-    res.json({ success: true, ...result });
-  } catch (err: any) {
-    console.error("Error finalizing session:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
+  const session = requirePodcastHost(req, res);
+  if (!session) return;
+  res.status(501).json({ success: false, notConfigured: true, error: "Podcast recording export isn't available yet." });
 });
 
-// 8. Record real-time multi-camera live switch metadata
+// 8. Record real-time multi-camera live switch metadata (host only)
 app.post("/api/podcast/sessions/:id/live-switch", (req: any, res) => {
   try {
-    const { camera, label, speakerName, timestamp, transition } = req.body;
-    const result = podcastService.recordLiveSwitch(req.params.id, {
+    const session = requirePodcastHost(req, res);
+    if (!session) return;
+    const { camera, label, speakerName, timestamp, transition } = req.body || {};
+    if (!["cam_host", "cam_guest", "cam_guest_2", "cam_split", "cam_gallery"].includes(camera)) {
+      return res.status(400).json({ success: false, error: "Invalid camera." });
+    }
+    const result = podcastService.recordLiveSwitch(session.id, {
       camera,
-      label,
-      speakerName,
+      label: typeof label === "string" ? label.slice(0, 120) : undefined,
+      speakerName: typeof speakerName === "string" ? speakerName.slice(0, 120) : undefined,
       timestamp: Number(timestamp || 0),
-      transition: transition || "cut",
+      transition: transition === "dissolve" ? "dissolve" : "cut",
     });
     res.json({ success: true, ...result });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(podcastErrorStatus(err, 500)).json({ success: false, error: err.message });
   }
 });
 
-// 9. Send invitation email to guest
+// 9. Invitation emails aren't sent by the server yet (the app opens the host's own mail app instead).
 app.post("/api/podcast/sessions/:id/invite-email", (req: any, res) => {
-  try {
-    const { email, message } = req.body;
-    if (!email) {
-      return res.status(400).json({ success: false, error: "Recipient email is required" });
-    }
-    const result = podcastService.sendInviteEmail(req.params.id, email, message);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  res.status(501).json({ success: false, notConfigured: true, error: "Email invites aren't set up yet. Copy the guest link instead." });
 });
 
 // 2. Developer-only System Readiness Endpoint (Exact 8 Services)
@@ -1322,8 +1320,8 @@ app.post("/api/render-clip", async (req: any, res) => {
       filename: result.filename,
     });
   } catch (err: any) {
-    console.error("Render clip error:", err);
-    res.status(500).json({ success: false, error: err.message || "Failed to render video" });
+    if (!err?.userFacing) console.error("Render clip error:", err);
+    res.status(err?.userFacing ? 400 : 500).json({ success: false, error: err.message || "Failed to render video" });
   }
 });
 
@@ -1999,9 +1997,7 @@ Return a JSON object with this exact structure:
       "suggestedStockKeywords": ["keyword1", "keyword2", "keyword3"],
       "cameraMotion": "Fast zoom / pan / dolly",
       "audioMood": "Tension / upbeat / resolve",
-      "transition": "Cut / Zoom / Glitch",
-      "mediaUrl": "/storage/uploads/sample_test.mp4",
-      "mediaType": "video"
+      "transition": "Cut / Zoom / Glitch"
     }
   ]
 }`;
@@ -2438,15 +2434,14 @@ app.post("/api/ai/turn-into-content", async (req: any, res) => {
     const db = readDb();
     if (!db.projects) db.projects = [];
 
+    // Only ever attach versions to one of this user's own projects.
+    const mine = ownedBy(req);
     let targetProject = null;
     if (projectId) {
-      targetProject = db.projects.find((p: any) => p.id === projectId);
+      targetProject = db.projects.find((p: any) => p.id === projectId && mine(p));
     }
     if (!targetProject && sourceTitle) {
-      targetProject = db.projects.find((p: any) => p.name === sourceTitle);
-    }
-    if (!targetProject) {
-      targetProject = db.projects.find((p: any) => p.type === "ai_generated");
+      targetProject = db.projects.find((p: any) => p.name === sourceTitle && mine(p));
     }
 
     if (targetProject) {
@@ -2462,14 +2457,15 @@ app.post("/api/ai/turn-into-content", async (req: any, res) => {
       writeDb(db);
     } else {
       const newProject = {
-        id: projectId || `proj_gen_${Date.now()}`,
+        id: `proj_gen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        userId: currentUserId(req),
         name: sourceTitle || "AI Video Project",
         type: "ai_generated",
         status: "ready",
         duration: variants[0]?.duration || 30,
         aspectRatio: variants[0]?.aspectRatio || "9:16",
         sourceVideoUrl: sourceVideoUrl || variants[0]?.videoUrl,
-        sourceThumbnail: variants[0]?.thumbnailUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80",
+        sourceThumbnail: variants[0]?.thumbnailUrl || "",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         contentVariants: variants,

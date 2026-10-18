@@ -17,6 +17,7 @@ import {
 import { AspectRatio, BrandKit, Project, Plan, UserProfile, ViewMode } from "../types";
 import { useLanguage } from "../i18n/LanguageContext";
 import { LanguageSelector } from "./LanguageSelector";
+import { AVATAR_PLACEHOLDER } from "../utils/placeholders";
 
 interface HeaderProps {
   activeProject: Project | null;
@@ -259,7 +260,7 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] p-0.5">
               <img
-                src={currentUser?.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"}
+                src={currentUser?.avatarUrl || AVATAR_PLACEHOLDER}
                 alt="Account profile"
                 className="w-full h-full object-cover rounded-full bg-[#0E121C]"
               />

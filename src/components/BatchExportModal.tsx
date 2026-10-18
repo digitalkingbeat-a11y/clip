@@ -22,6 +22,7 @@ import {
   Video,
 } from "lucide-react";
 import { ClipItem, BrandKit, AspectRatio } from "../types";
+import { MEDIA_PLACEHOLDER } from "../utils/placeholders";
 
 interface BatchExportModalProps {
   isOpen: boolean;
@@ -96,7 +97,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   selectedClips,
   onRemoveClipFromBatch,
   brandKit,
-  projectId = "proj_demo_keynote",
+  projectId = "",
   onScheduleClips,
 }) => {
   // Brand Kit & Export Customization States
@@ -339,7 +340,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-9 h-14 bg-slate-900 rounded overflow-hidden flex-shrink-0 relative">
                       <img
-                        src={clip.thumbnailUrl || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=200&q=80"}
+                        src={clip.thumbnailUrl || MEDIA_PLACEHOLDER}
                         alt={clip.title}
                         className="w-full h-full object-cover"
                       />

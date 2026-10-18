@@ -59,7 +59,6 @@ import {
   INITIAL_CLIPS,
   INITIAL_TIMELINE_ITEMS,
   INITIAL_TIMELINE_TRACKS,
-  SAMPLE_VIDEOS,
   INITIAL_MEDIA_LIBRARY,
   DEFAULT_PLANS,
   DEFAULT_CREDIT_PACKS,
@@ -73,6 +72,11 @@ import { OfflineNotice } from "./components/OfflineNotice";
 import { usePWAInstall } from "./hooks/usePWAInstall";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 
+
+// Media from old demo builds (sample clips, stock test streams). Never shown to users.
+function isLegacySampleUrl(u: any): boolean {
+  return typeof u === "string" && /sample_test\.mp4|gtv-videos-bucket|actions\.google\.com\/sounds/.test(u);
+}
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>("home");
@@ -151,7 +155,8 @@ export default function App() {
           return parsed.filter(
             (it: any) =>
               !["item_vid_01", "item_broll_01", "item_captions_01", "item_text_01", "item_voice_01", "item_music_01", "item_sfx_01"].includes(it.id) &&
-              it.text !== "THE 60-DAY CREATOR TRAP"
+              it.text !== "THE 60-DAY CREATOR TRAP" &&
+              !isLegacySampleUrl(it.sourceUrl)
           );
         }
       }
@@ -208,6 +213,8 @@ export default function App() {
           const nonDemo = parsed.filter(
             (p: any) =>
               p.id !== "proj_podcast_01" &&
+              p.id !== "proj_demo_keynote" &&
+              !isLegacySampleUrl(p.sourceVideoUrl) &&
               !p.name?.includes("Podcast: The Future") &&
               !p.name?.includes("Creator Economy")
           );
@@ -366,7 +373,8 @@ export default function App() {
       if (savedItems) {
         const parsed = JSON.parse(savedItems);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setTimelineItems(parsed);
+          // Drop leftover sample media from older versions.
+          setTimelineItems(parsed.filter((it: any) => !isLegacySampleUrl(it?.sourceUrl)));
         }
       }
       const savedClips = localStorage.getItem("clipflow_clips");
@@ -623,11 +631,6 @@ export default function App() {
   };
 
   const handleUpdateClip = (updated: ClipItem) => {
-    if (updated.id === "clip_01") {
-      try {
-        localStorage.setItem("clipflow_demo_clip_title", updated.title);
-      } catch (e) {}
-    }
     setClips((prev) => {
       const exists = prev.some((c) => c.id === updated.id);
       const next = exists ? prev.map((c) => (c.id === updated.id ? updated : c)) : [updated, ...prev];
@@ -687,17 +690,6 @@ export default function App() {
         sourceStartTime: 0,
         text: clip.title.toUpperCase(),
         color: "#ffffff",
-      },
-      {
-        id: `item_music_${clip.id}`,
-        trackId: "track_music",
-        name: "Ambient Lo-Fi Groove.mp3",
-        type: "music",
-        startTime: 0,
-        duration: clip.duration,
-        sourceStartTime: 0,
-        sourceUrl: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-        volume: 30,
       }
     ];
 
@@ -711,8 +703,9 @@ export default function App() {
     const newItems: TimelineItem[] = [];
 
     script.scenes.forEach((sc, idx) => {
-      const mediaSource = sc.mediaUrl || "/storage/uploads/sample_test.mp4";
-      const isImg = sc.mediaType === "image" || (sc.mediaUrl && (sc.mediaUrl.endsWith(".jpg") || sc.mediaUrl.endsWith(".png") || sc.mediaUrl.includes("images.unsplash.com")));
+      // Scenes without their own media stay empty slots (no sample video is ever substituted).
+      const mediaSource = sc.mediaUrl && !sc.mediaUrl.includes("sample_test") ? sc.mediaUrl : "";
+      const isImg = sc.mediaType === "image" || (!!mediaSource && /\.(jpe?g|png|webp)(\?|$)/i.test(mediaSource));
 
       newItems.push({
         id: `item_sc_${idx}_vid`,
@@ -821,8 +814,9 @@ export default function App() {
       status: "ready",
       duration: template.duration,
       aspectRatio: template.aspectRatio,
-      sourceVideoUrl: template.timelineItems[0]?.sourceUrl || "/storage/uploads/sample_test.mp4",
-      sourceThumbnail: template.placeholderMedia[0]?.thumbnail || "/storage/thumbnails/ClipFlow_Master_1790347251891.mp4.jpg",
+      // Templates are structure only: the user drops in their own footage.
+      sourceVideoUrl: "",
+      sourceThumbnail: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       clipsCount: template.timelineItems.length,
@@ -1042,6 +1036,23 @@ export default function App() {
 
   if (legalPage) {
     return <LegalPage page={legalPage} onBack={closeLegal} />;
+  }
+
+  // A signed-out guest who opened a podcast invite link goes straight to the join screen.
+  const guestInviteParams = (() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      return sp.get("podcastSession") || sp.get("join") ? sp : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (!currentUser && guestInviteParams) {
+    return (
+      <div className="min-h-[100dvh] w-screen overflow-y-auto bg-[#080A0F] text-[#F7F8FA] font-sans antialiased">
+        <PodcastStudioView guestOnly onNavigateToEditor={() => {}} />
+      </div>
+    );
   }
 
   if (!currentUser) {

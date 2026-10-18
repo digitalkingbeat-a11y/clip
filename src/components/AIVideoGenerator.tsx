@@ -116,7 +116,7 @@ const AMBIENCE_PRESETS = [
   "Cinematic Strings",
 ];
 
-const SAMPLE_TEMPLATES = [
+const PROMPT_IDEAS = [
   "Create a 15-second aerodynamic paper airplane tutorial that glides over 100 feet.",
   "Create a 15-second cinematic product showcase with macro textures and moody lighting.",
   "Create a 30-second high-converting TikTok breaking down why most video workflows fail.",
@@ -127,7 +127,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   onOpenInTimeline,
   onSchedulePost,
   connectedAccounts = [],
-  activeProjectId = "proj_gen_01",
+  activeProjectId = "",
   onSaveVariantsToProject,
 }) => {
   // Step Progression: 1: Prompt -> 2: References -> 3: Storyboard -> 4: Review & Edit -> 5: Turn Into Content
@@ -161,7 +161,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   }>({
     name: "",
     category: "person",
-    url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80",
+    url: "",
     notes: "",
   });
   const refImageFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -184,7 +184,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   // Master Video & Review State
-  const [masterVideoUrl, setMasterVideoUrl] = useState<string | null>("/storage/uploads/sample_test.mp4");
+  const [masterVideoUrl, setMasterVideoUrl] = useState<string | null>(null);
   const [masterThumbnailUrl, setMasterThumbnailUrl] = useState<string | null>(null);
   const [selectedShotForEdit, setSelectedShotForEdit] = useState<string | null>(null);
   const [editInstruction, setEditInstruction] = useState<string>("");
@@ -238,7 +238,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         if (parsed.tone) setTone(parsed.tone);
         if (parsed.videoTitle) setVideoTitle(parsed.videoTitle);
         if (Array.isArray(parsed.shots) && parsed.shots.length > 0) setShots(parsed.shots);
-        if (parsed.masterVideoUrl) setMasterVideoUrl(parsed.masterVideoUrl);
+        if (parsed.masterVideoUrl && !String(parsed.masterVideoUrl).includes("sample_test")) setMasterVideoUrl(parsed.masterVideoUrl);
         if (Array.isArray(parsed.selectedReferenceIds)) setSelectedReferenceIds(parsed.selectedReferenceIds);
         if (Array.isArray(parsed.contentVariants)) setContentVariants(parsed.contentVariants);
       }
@@ -310,7 +310,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         setNewRefForm({
           name: "",
           category: "person",
-          url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80",
+          url: "",
           notes: "",
         });
       }
@@ -1110,7 +1110,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                   Quick High-Retention Templates
                 </span>
                 <div className="space-y-1.5">
-                  {SAMPLE_TEMPLATES.map((tmpl, idx) => (
+                  {PROMPT_IDEAS.map((tmpl, idx) => (
                     <div
                       key={idx}
                       onClick={() => {
@@ -2030,9 +2030,12 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                   </button>
 
                   <a
-                    href={masterVideoUrl || "/storage/uploads/sample_test.mp4"}
+                    href={masterVideoUrl || undefined}
                     download={`ClipFlow_${videoTitle.replace(/\s+/g, "_")}.mp4`}
-                    className="py-2 rounded-xl bg-[#171C27] hover:bg-[#202737] border border-[#272D3A] text-xs font-semibold text-gray-200 flex items-center justify-center gap-1.5 text-center"
+                    aria-disabled={!masterVideoUrl}
+                    onClick={(e) => { if (!masterVideoUrl) e.preventDefault(); }}
+                    title={masterVideoUrl ? "Download the rendered video" : "Render your video first"}
+                    className={`py-2 rounded-xl bg-[#171C27] border border-[#272D3A] text-xs font-semibold flex items-center justify-center gap-1.5 text-center ${masterVideoUrl ? "hover:bg-[#202737] text-gray-200" : "opacity-40 cursor-not-allowed text-gray-500"}`}
                   >
                     <Download className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Download Master</span>
@@ -2087,18 +2090,26 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 aspectRatio === "9:16" ? "aspect-[9/16] max-h-[580px]" : aspectRatio === "1:1" ? "aspect-square max-h-[500px]" : "aspect-video max-h-[400px]"
               }`}
             >
-              <video
-                src={masterVideoUrl || "/storage/uploads/sample_test.mp4"}
-                controls
-                className="w-full h-full object-cover"
-                poster={masterThumbnailUrl || undefined}
-              />
+              {masterVideoUrl ? (
+                <video
+                  src={masterVideoUrl}
+                  controls
+                  className="w-full h-full object-cover"
+                  poster={masterThumbnailUrl || undefined}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-2 p-6 text-center">
+                  <Film className="w-8 h-8 text-[#3A4256]" />
+                  <p className="text-sm font-semibold text-gray-300">No video yet</p>
+                  <p className="text-xs text-[#6B7385] max-w-[220px]">Write a prompt, build the storyboard, then render to see your video here.</p>
+                </div>
+              )}
             </div>
 
             <div className="mt-4 flex items-center justify-between w-full px-2 text-xs text-[#9CA5B5]">
               <span>Format: {aspectRatio}</span>
               <span>{videoTitle}</span>
-              <span className="text-emerald-400 font-mono">1080p MP4 Ready</span>
+              <span className={masterVideoUrl ? "text-emerald-400 font-mono" : "text-[#6B7385] font-mono"}>{masterVideoUrl ? "MP4 ready" : "Not rendered"}</span>
             </div>
           </div>
         </div>
@@ -2321,11 +2332,17 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
                           {/* Video Canvas with Dynamic Aspect Ratio & Multi-Platform Safe Area Overlay */}
                           <div className={`relative ${aspectContainerClass} bg-black rounded-xl overflow-hidden border border-[#272D3A]`}>
-                            <video
-                              src={cur.videoUrl || masterVideoUrl || "/storage/uploads/sample_test.mp4"}
-                              controls
-                              className="w-full h-full object-cover"
-                            />
+                            {cur.videoUrl || masterVideoUrl ? (
+                              <video
+                                src={cur.videoUrl || masterVideoUrl || undefined}
+                                controls
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="absolute inset-0 flex items-center justify-center text-xs text-[#6B7385] text-center p-4">
+                                Render your video first to preview this version.
+                              </div>
+                            )}
 
                             {/* Safe Area Visual Overlays */}
                             {showSafeAreaOverlay && (

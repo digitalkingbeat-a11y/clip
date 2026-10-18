@@ -18,6 +18,7 @@ import {
   Sliders,
 } from "lucide-react";
 import { Project } from "../../types";
+import { AVATAR_PLACEHOLDER, MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 export interface AdPhonePreviewProps {
   thumbnail: string;
@@ -107,7 +108,7 @@ export const AdPhonePreview: React.FC<AdPhonePreviewProps> = ({
           <div className="absolute right-2 bottom-20 z-20 flex flex-col items-center gap-2.5 text-white">
             <div className="w-7 h-7 rounded-full border border-white/60 overflow-hidden bg-gray-600">
               <img
-                src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80"
+                src={AVATAR_PLACEHOLDER}
                 alt="avatar"
                 className="w-full h-full object-cover"
               />
@@ -148,7 +149,7 @@ export const AdPhonePreview: React.FC<AdPhonePreviewProps> = ({
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-full bg-[#2b2b2f] border border-[#333] overflow-hidden">
                 <img
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80"
+                  src={AVATAR_PLACEHOLDER}
                   alt="avatar"
                   className="w-full h-full object-cover"
                 />
@@ -215,7 +216,7 @@ export const AdPreviewStudio: React.FC<AdPreviewStudioProps> = ({
   const [primaryCopy, setPrimaryCopy] = useState("The retention editing secret top YouTubers use in 2026. Stop wasting hours on manual Premiere edits.");
 
   const activeVideo = projects[0]?.sourceVideoUrl || "";
-  const activeThumbnail = projects[0]?.sourceThumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80";
+  const activeThumbnail = projects[0]?.sourceThumbnail || MEDIA_PLACEHOLDER;
 
   // Automated Obstruction Detection Logic:
   // If caption is too low (> 78%), it collides with bottom profile & CTA banner.
@@ -443,7 +444,7 @@ export const AdPreviewStudio: React.FC<AdPreviewStudioProps> = ({
                 <div className="absolute right-2 bottom-24 z-20 flex flex-col items-center gap-3.5 text-white">
                   <div className="relative">
                     <div className="w-8 h-8 rounded-full border-2 border-white overflow-hidden bg-gray-500">
-                      <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&q=80" alt="avatar" className="w-full h-full object-cover" />
+                      <img src={AVATAR_PLACEHOLDER} alt="avatar" className="w-full h-full object-cover" />
                     </div>
                     <div className="w-3.5 h-3.5 rounded-full bg-[#FE2C55] text-white flex items-center justify-center text-[9px] absolute -bottom-1 left-2.5">
                       +

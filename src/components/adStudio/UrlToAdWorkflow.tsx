@@ -18,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Project, TimelineTrack, TimelineItem, AspectRatio } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 interface UrlToAdWorkflowProps {
   onBackToHub: () => void;
@@ -46,10 +47,10 @@ export const UrlToAdWorkflow: React.FC<UrlToAdWorkflowProps> = ({
   ]);
 
   const [extractedImages, setExtractedImages] = useState<string[]>([
-    "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
-    "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=600&q=80",
-    "https://images.unsplash.com/photo-1593642632823-8f785ba67e45?w=600&q=80",
-    "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&q=80",
+    MEDIA_PLACEHOLDER,
+    MEDIA_PLACEHOLDER,
+    MEDIA_PLACEHOLDER,
+    MEDIA_PLACEHOLDER,
   ]);
 
   // Selected ClipFlow library media to blend with

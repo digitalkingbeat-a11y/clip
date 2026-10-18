@@ -1,3 +1,4 @@
+import { MEDIA_PLACEHOLDER } from "./placeholders";
 /**
  * CLIPFLOW VIDEO THUMBNAIL FILMSTRIP ENGINE
  * Dynamically computes and caches continuous thumbnail frame sequences
@@ -47,15 +48,7 @@ export function getFilmstripFrames(
     return existing;
   }
 
-  const baseThumb =
-    sourceThumbnail ||
-    (sourceUrl && sourceUrl.includes("ForBiggerBlazes")
-      ? "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=400&q=80"
-      : sourceUrl && sourceUrl.includes("ForBiggerEscapes")
-      ? "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=400&q=80"
-      : sourceUrl && sourceUrl.includes("BigBuckBunny")
-      ? "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80"
-      : "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=400&q=80");
+  const baseThumb = sourceThumbnail || MEDIA_PLACEHOLDER;
 
   const frames: FilmstripFrame[] = [];
   const timeStep = duration / Math.max(1, frameCount);
