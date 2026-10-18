@@ -789,7 +789,7 @@ export const AutomationsView: React.FC<AutomationsViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-[#9CA5B5] max-w-2xl">
-                  Run a simulated pipeline test. ClipFlow analyzes a sample raw video, generates 7 viral candidates, creates Hormozi captions & descriptions, and assigns them across Monday–Sunday without sending live posts.
+                  A dry run of your pipeline without sending live posts. Not available yet: it needs a connected video source and social accounts.
                 </p>
               </div>
 

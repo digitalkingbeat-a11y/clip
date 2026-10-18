@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Project, AspectRatio } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 export interface PlacementAdaptSpec {
   id: string;
@@ -48,7 +49,7 @@ export const MultiPlatformLaunch: React.FC<MultiPlatformLaunchProps> = ({
     name: "Master ClipFlow Promo 4K",
     aspectRatio: "9:16" as AspectRatio,
     duration: 30,
-    sourceThumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+    sourceThumbnail: MEDIA_PLACEHOLDER,
     sourceVideoUrl: "",
   });
 

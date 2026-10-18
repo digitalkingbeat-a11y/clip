@@ -44,7 +44,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   aspectRatio,
   projectName,
-  projectId = "proj_demo_keynote",
+  projectId = "",
   activeClip,
   brandKit,
   timelineItems,

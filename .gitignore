@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+node_modules
+
+# Runtime data (the database and users' uploaded/rendered media) never goes in git.
+# The server creates storage/ and an empty db.json on first start.
+storage/
+
+# ffmpeg/ffprobe binaries fetched at runtime
+bin/

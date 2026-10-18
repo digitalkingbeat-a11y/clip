@@ -15,7 +15,6 @@ import {
   Layers,
   Check
 } from "lucide-react";
-import { SAMPLE_VIDEOS } from "../mockData";
 import { MediaItem } from "../types";
 import { extractMediaMetadata, saveMediaBlob } from "../utils/mediaStore";
 
@@ -29,8 +28,6 @@ interface UploadModalProps {
 interface QueuedItem {
   id: string;
   file?: File;
-  isPreset?: boolean;
-  presetIndex?: number;
   name: string;
   sizeBytes: number;
   type: "video" | "audio" | "image" | "broll";
@@ -197,32 +194,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setErrorMessage(null);
   };
 
-  const handleAddPresetToQueue = (presetIndex: number) => {
-    if (isUploading) return;
-    const sample = SAMPLE_VIDEOS[presetIndex];
-    const isAlreadyQueued = queuedItems.some(
-      (q) => q.isPreset && q.presetIndex === presetIndex
-    );
-    if (isAlreadyQueued) {
-      // Toggle off if already queued
-      setQueuedItems((prev) => prev.filter((q) => !(q.isPreset && q.presetIndex === presetIndex)));
-      return;
-    }
-
-    const newItem: QueuedItem = {
-      id: `preset_${presetIndex}_${Date.now()}`,
-      isPreset: true,
-      presetIndex,
-      name: `${sample.title.replace(/[^a-zA-Z0-9_-]/g, "_")}.mp4`,
-      sizeBytes: sample.duration * 380000, // Estimated representation
-      type: "video",
-      previewUrl: sample.thumbnail,
-      status: "queued",
-    };
-
-    setQueuedItems((prev) => [...prev, newItem]);
-  };
-
   const totalBytes = queuedItems.reduce((acc, item) => acc + item.sizeBytes, 0);
 
   // Client-side batch upload processor with no server dependency
@@ -270,11 +241,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             objectUrl = URL.createObjectURL(item.file);
             thumbnail = objectUrl;
           }
-        } else if (item.isPreset && item.presetIndex !== undefined) {
-          const sample = SAMPLE_VIDEOS[item.presetIndex];
-          objectUrl = sample.url;
-          thumbnail = sample.thumbnail;
-          duration = sample.duration || 30;
         }
 
         const mediaId = `media_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
@@ -557,9 +523,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                               {item.type}
                             </span>
                             <span>{formatFileSize(item.sizeBytes)}</span>
-                            {item.isPreset && (
-                              <span className="text-[#16D9F5]">• Demo Footage</span>
-                            )}
                           </div>
                         </div>
                       </div>
@@ -592,53 +555,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               </div>
             </div>
           )}
-
-          {/* Preset Demo Footage Ingestion */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] uppercase font-bold text-[#9CA5B5] block">
-                Or Add Curated Demo Footage to Batch
-              </span>
-              <span className="text-[10px] text-[#9CA5B5]">Click card to queue / unqueue</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {SAMPLE_VIDEOS.map((vid, idx) => {
-                const isSelected = queuedItems.some(
-                  (q) => q.isPreset && q.presetIndex === idx
-                );
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => !isUploading && handleAddPresetToQueue(idx)}
-                    className={`p-2.5 rounded-lg border cursor-pointer transition-all flex items-center gap-2.5 ${
-                      isSelected
-                        ? "bg-[#168CFF]/20 border-[#16D9F5] ring-1 ring-[#16D9F5]"
-                        : "bg-[#171C27] border-[#272D3A] text-[#9CA5B5] hover:text-white hover:border-gray-500"
-                    } ${isUploading ? "pointer-events-none opacity-60" : ""}`}
-                  >
-                    <div className="relative w-12 h-9 rounded overflow-hidden flex-shrink-0 bg-black">
-                      <img
-                        src={vid.thumbnail}
-                        alt={vid.title}
-                        className="w-full h-full object-cover"
-                      />
-                      {isSelected && (
-                        <div className="absolute inset-0 bg-[#168CFF]/40 flex items-center justify-center">
-                          <CheckCircle2 className="w-4 h-4 text-white" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-white truncate">{vid.title}</p>
-                      <p className="text-[10px] text-[#9CA5B5]">
-                        {vid.type} • {Math.floor(vid.duration / 60)}m
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
 
           {/* Real Batch Upload Progress Indicator */}
           {isUploading && (

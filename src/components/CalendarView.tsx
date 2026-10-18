@@ -431,13 +431,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     }
   }, [userTimeZone]);
 
-  // Connected platforms set (default to YouTube, TikTok, Instagram if no prop passed)
+  // Connected platforms set (only accounts the user really connected)
   const connectedPlatforms = useMemo(() => {
     if (connectedAccounts && connectedAccounts.length > 0) {
       return new Set(connectedAccounts.filter((a) => a.connected !== false).map((a) => a.platform));
     }
-    // Default mock accounts connected in ClipFlow
-    return new Set<SocialPlatform>(["youtube", "tiktok", "instagram"]);
+    // No connected accounts: nothing is shown as connected.
+    return new Set<SocialPlatform>();
   }, [connectedAccounts]);
 
   // Today string YYYY-MM-DD

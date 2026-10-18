@@ -19,6 +19,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Project, TimelineTrack, TimelineItem, AspectRatio } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 interface CreativeVariationsLabProps {
   projects: Project[];
@@ -58,7 +59,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
     musicTrack: "Low-Fi Phonk Bassline (128 BPM)",
     predictedCtr: "3.6%",
     aspectRatio: "9:16",
-    thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+    thumbnail: MEDIA_PLACEHOLDER,
     isMaster: true,
   };
 
@@ -76,7 +77,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
       musicTrack: "High-Pacing Tech House",
       predictedCtr: "4.8%",
       aspectRatio: "9:16",
-      thumbnail: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&q=80",
+      thumbnail: MEDIA_PLACEHOLDER,
     },
     {
       id: "var_02",
@@ -89,7 +90,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
       musicTrack: "Subtle Driving Sub-Bass",
       predictedCtr: "4.4%",
       aspectRatio: "9:16",
-      thumbnail: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
+      thumbnail: MEDIA_PLACEHOLDER,
     },
     {
       id: "var_03",
@@ -102,7 +103,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
       musicTrack: "Upbeat Modern Trap",
       predictedCtr: "4.1%",
       aspectRatio: "9:16",
-      thumbnail: "https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=600&q=80",
+      thumbnail: MEDIA_PLACEHOLDER,
     },
   ]);
 
@@ -158,7 +159,7 @@ export const CreativeVariationsLab: React.FC<CreativeVariationsLabProps> = ({
           musicTrack: "BPM Calibrated Beat",
           predictedCtr: `${(3.8 + Math.random() * 1.4).toFixed(1)}%`,
           aspectRatio: "9:16",
-          thumbnail: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&q=80",
+          thumbnail: MEDIA_PLACEHOLDER,
         });
       }
 

@@ -30,7 +30,6 @@ import {
   AdTargetPlatform,
   AspectRatio,
 } from "../../types";
-import { SAMPLE_VIDEOS } from "../../mockData";
 
 interface ClipsToAdsWorkflowProps {
   projects: Project[];
@@ -50,48 +49,22 @@ export interface AvailableClip {
   hook?: string;
 }
 
-export const getAvailableClips = (projects: Project[]): AvailableClip[] => [
-  ...projects.map((p) => ({
-    id: p.id,
-    title: p.name,
-    source: "Projects",
-    duration: p.duration || 30,
-    aspectRatio: p.aspectRatio,
-    thumbnail: p.sourceThumbnail,
-    videoUrl: p.sourceVideoUrl || "",
-    hook: "Why 90% of Video Ads Flop in the First 3 Seconds",
-  })),
-  {
-    id: "clip_native_01",
-    title: "Podcast: 4K Double-Ender Breakthrough",
-    source: "AI Clips",
-    duration: 34,
-    aspectRatio: "9:16" as AspectRatio,
-    thumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "",
-    hook: "Stop recording remote podcasts over blurry Zoom calls.",
-  },
-  {
-    id: "clip_native_02",
-    title: "Astra Mastered Viral Hook #1",
-    source: "Astra Post",
-    duration: 28,
-    aspectRatio: "9:16" as AspectRatio,
-    thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "",
-    hook: "This one audio setting makes your TikToks sound 10x louder.",
-  },
-  {
-    id: "clip_native_03",
-    title: "AI Video Storyboard Showcase",
-    source: "AI Video",
-    duration: 45,
-    aspectRatio: "16:9" as AspectRatio,
-    thumbnail: "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=600&q=80",
-    videoUrl: "",
-    hook: "Generate full cinematic commercial storyboards from a single sentence.",
-  },
-];
+// Only the user's own projects that actually have a video. No sample clips.
+export const getAvailableClips = (projects: Project[]): AvailableClip[] =>
+  projects
+    .filter((p) => !!p.sourceVideoUrl)
+    .map((p) => ({
+      id: p.id,
+      title: p.name,
+      source: "Projects",
+      duration: p.duration || 30,
+      aspectRatio: p.aspectRatio,
+      thumbnail: p.sourceThumbnail,
+      videoUrl: p.sourceVideoUrl || "",
+      hook: "",
+    }));
+
+const EMPTY_CLIP: AvailableClip = { id: "", title: "", source: "", duration: 0, aspectRatio: "9:16", videoUrl: "", hook: "" };
 
 export const ClipsToAdsWorkflow: React.FC<ClipsToAdsWorkflowProps> = ({
   projects,
@@ -102,12 +75,12 @@ export const ClipsToAdsWorkflow: React.FC<ClipsToAdsWorkflowProps> = ({
   // Step tracker
   const [currentStep, setCurrentStep] = useState<number>(1);
 
-  // Available finished clips pool (combines user projects & sample high-hook clips)
+  // Available finished clips pool (the user's own projects)
   const availableClips = getAvailableClips(projects);
 
   // Wizard state
-  const [selectedClipId, setSelectedClipId] = useState<string>(availableClips[0].id);
-  const selectedClip = availableClips.find((c) => c.id === selectedClipId) || availableClips[0];
+  const [selectedClipId, setSelectedClipId] = useState<string>(availableClips[0]?.id || "");
+  const selectedClip = availableClips.find((c) => c.id === selectedClipId) || availableClips[0] || EMPTY_CLIP;
 
   const [selectedPlatform, setSelectedPlatform] = useState<AdTargetPlatform>("tiktok");
   const [selectedObjective, setSelectedObjective] = useState<AdCampaignGoal>("get_sales");
@@ -221,6 +194,19 @@ export const ClipsToAdsWorkflow: React.FC<ClipsToAdsWorkflowProps> = ({
     "9. Preview",
     "10. Publish",
   ];
+
+  if (availableClips.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-[#1d1d1f] text-gray-200 p-8 text-center gap-3">
+        <Scissors className="w-8 h-8 text-gray-500" />
+        <p className="text-sm font-semibold text-white">No videos yet</p>
+        <p className="text-xs text-gray-400 max-w-xs">Upload a video or finish a project first, then turn it into an ad here.</p>
+        <button onClick={onBackToHub} className="mt-1 px-3 py-1.5 rounded-[6px] bg-[#2b2b2f] hover:bg-[#323237] border border-[#333] text-xs text-gray-200 cursor-pointer">
+          Back
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col bg-[#1d1d1f] text-gray-200 overflow-hidden">

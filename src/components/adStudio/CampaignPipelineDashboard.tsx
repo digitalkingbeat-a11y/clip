@@ -37,6 +37,7 @@ import {
   AdTargetPlatform,
   AdCampaignGoal,
 } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 export type PipelineBoardStage = "draft" | "research" | "scripting" | "creative_generation" | "approval";
 
@@ -275,7 +276,7 @@ export const CampaignPipelineDashboard: React.FC<CampaignPipelineDashboardProps>
       format: "9:16",
       duration: 30,
       videoUrl: "",
-      thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+      thumbnailUrl: MEDIA_PLACEHOLDER,
       hook: campaign.hooks[0]?.text || "Why Most Video Ads Flop",
     };
 
@@ -395,7 +396,7 @@ export const CampaignPipelineDashboard: React.FC<CampaignPipelineDashboardProps>
           format: "9:16",
           duration: 30,
           videoUrl: "",
-          thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+          thumbnailUrl: MEDIA_PLACEHOLDER,
           hook: `Why most ${newProdName} ads fail in 3 seconds.`,
           cta: newOffer,
           approved: false,
@@ -485,7 +486,7 @@ export const CampaignPipelineDashboard: React.FC<CampaignPipelineDashboardProps>
             format: "9:16",
             duration: 25,
             videoUrl: "",
-            thumbnailUrl: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
+            thumbnailUrl: MEDIA_PLACEHOLDER,
             hook: "Desk lamps are dead in 2026.",
             cta: "Get 30% Off Today",
             approved: false,

@@ -87,7 +87,7 @@ export class PipelineManager {
     projectId: string,
     videoFilePath: string,
     genAIClient: GoogleGenAI | null,
-    userId: string = "usr_default_creator"
+    userId: string = ""
   ): Promise<void> {
     const updateJob = (updates: Partial<PipelineJob>) => {
       const db = readDb();
@@ -492,7 +492,7 @@ export class PipelineManager {
     captions: TimedCaptionWord[],
     brandKit: any,
     options?: RenderOptions,
-    userId: string = "usr_default_creator"
+    userId: string = ""
   ): Promise<{ renderUrl: string; filename: string }> {
     const db = readDb();
     const project = db.projects.find((p: any) => p.id === projectId);
@@ -511,11 +511,18 @@ export class PipelineManager {
       throw new Error("That source video wasn't found in your library.");
     }
     if (hasScenes) {
-      (options as any).scenes = (options as any).scenes.map((sc: any) => {
+      (options as any).scenes = (options as any).scenes.map((sc: any, i: number) => {
         const { localPath: _ignored, ...rest } = sc || {};
         const url = rest.sourceUrl || rest.mediaUrl;
-        const localPath = url ? resolveOwnedMediaPath(url, userId, ["uploads", "renders"]) : "";
-        // Files that aren't this user's are never read; the scene renders as a plain card.
+        const localPath = url ? resolveOwnedMediaPath(url, userId, ["uploads", "renders", "clips"]) : "";
+        // Files that aren't this user's are never read. Say so clearly instead of rendering a blank card.
+        if (url && !localPath) {
+          const err: any = new Error(
+            `Clip ${i + 1} in your timeline uses a file that isn't in your library. Re-upload it or remove that clip, then export again.`
+          );
+          err.userFacing = true;
+          throw err;
+        }
         return { ...rest, localPath };
       });
     }

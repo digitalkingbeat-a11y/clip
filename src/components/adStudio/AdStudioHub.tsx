@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { COMING_SOON_AD_WORKFLOWS } from "./availability";
 import {
   Megaphone,
   Sparkles,
@@ -438,9 +439,15 @@ export const AdStudioHub: React.FC<AdStudioHubProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold border ${w.badgeColor}`}>
-                        {w.badge}
-                      </span>
+                      {COMING_SOON_AD_WORKFLOWS.has(w.id) ? (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold border bg-[#131926] text-gray-400 border-[#2D3952]">
+                          COMING SOON
+                        </span>
+                      ) : (
+                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold border ${w.badgeColor}`}>
+                          {w.badge}
+                        </span>
+                      )}
                       <span className="text-[10px] font-mono text-gray-500">{w.estimatedTime}</span>
                     </div>
                   </div>

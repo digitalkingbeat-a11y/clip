@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { COMING_SOON_AD_WORKFLOWS } from "./adStudio/availability";
+import { MEDIA_PLACEHOLDER } from "../utils/placeholders";
 import {
   Megaphone,
   Sparkles,
@@ -152,8 +154,8 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
   const [newProdName, setNewProdName] = useState("");
   const [newProdUrl, setNewProdUrl] = useState("https://");
   const [newProdDesc, setNewProdDesc] = useState("");
-  const [newPromptDirective, setNewPromptDirective] = useState("Make me a TikTok and Meta campaign");
-  const [newOffer, setNewOffer] = useState("14-Day Free Trial");
+  const [newPromptDirective, setNewPromptDirective] = useState("");
+  const [newOffer, setNewOffer] = useState("");
   const [newGoal, setNewGoal] = useState<AdCampaignGoal>("get_sales");
   const [newPlatforms, setNewPlatforms] = useState<AdTargetPlatform[]>(["tiktok", "instagram_reels", "youtube_shorts"]);
 
@@ -164,54 +166,26 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
     setTimeout(() => setToastMsg(null), 3500);
   };
 
-  // TODO: Meta OAuth
+  // Meta Ads OAuth isn't set up yet, so the account always starts (and stays) not connected.
   const [metaConnection, setMetaConnection] = useState<MetaConnectionState>({
-    isConnected: true,
-    accountName: "ClipFlow Growth Ads",
-    accountId: "act_8492041852",
-    facebookPage: "ClipFlow Official",
-    instagramAccount: "@clipflow.video",
-    connectedAt: "Just now",
+    isConnected: false,
+    accountName: "",
+    accountId: "",
+    facebookPage: "",
+    instagramAccount: "",
+    connectedAt: "",
   });
+  void setMetaConnection;
 
   const handleConnectMeta = () => {
-    // TODO: Meta OAuth
-    setMetaConnection({
-      isConnected: true,
-      accountName: "ClipFlow Growth Ads",
-      accountId: "act_8492041852",
-      facebookPage: "ClipFlow Official",
-      instagramAccount: "@clipflow.video",
-      connectedAt: "Just now",
-    });
-    showToast("Meta account connected successfully.");
+    showToast("Connecting Meta Ads isn't available yet.");
   };
-
-  const handleReconnectMeta = () => {
-    // TODO: Meta OAuth
-    setMetaConnection({
-      isConnected: true,
-      accountName: "ClipFlow Growth Ads",
-      accountId: "act_8492041852",
-      facebookPage: "ClipFlow Official",
-      instagramAccount: "@clipflow.video",
-      connectedAt: "Just now",
-    });
-    showToast("Meta connection refreshed.");
-  };
-
-  const handleManageMeta = () => {
-    // Toggles connection state so the user can easily test the not-connected state
-    setMetaConnection((prev) => ({
-      ...prev,
-      isConnected: !prev.isConnected,
-    }));
-    showToast(metaConnection.isConnected ? "Meta disconnected." : "Meta connected.");
-  };
+  const handleReconnectMeta = handleConnectMeta;
+  const handleManageMeta = handleConnectMeta;
 
   // Clips tray state (reused helper)
   const availableClips = useMemo(() => getAvailableClips(projects), [projects]);
-  const [selectedClipId, setSelectedClipId] = useState<string>(availableClips[0]?.id || "clip_native_01");
+  const [selectedClipId, setSelectedClipId] = useState<string>(availableClips[0]?.id || "");
   const selectedClip = useMemo(() => {
     return availableClips.find((c) => c.id === selectedClipId) || availableClips[0];
   }, [availableClips, selectedClipId]);
@@ -266,35 +240,17 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
     setPreviewPlacement(placementId);
   };
 
-  // AI write handler
-  const handleAiWrite = (field: "headline" | "copy") => {
-    const aiHeadlineOptions = [
-      "Why 90% of Video Ads Flop in the First 3 Seconds",
-      "Stop Cutting Video Ads Manually at 2 AM",
-      "The Secret Video Weapon of 7-Figure DTC Brands",
-      "How Top Creators Multiply 1 Clip into 10 High-CTR Ads",
-      "Before vs After: The 60-Second Video Ad Breakthrough",
-    ];
-    const aiCopyOptions = [
-      "Stop spending hours on manual video edits. ClipFlow turns any raw footage into high-converting paid ads in under 60 seconds.",
-      "Most advertisers suffer creative fatigue because manual editing takes too long. ClipFlow auto-formats hooks and safe zones in 1 click.",
-      "Turn 1 raw video into compliant Facebook Feed, Reels, and Instagram Stories creatives with auto-cropped aspect ratios.",
-      "Test 5 creative angles instead of 1. ClipFlow keeps your CPA low with automated variations and EBU R128 loudness mastering.",
-    ];
-
-    if (field === "headline") {
-      const nextH = aiHeadlineOptions[Math.floor(Math.random() * aiHeadlineOptions.length)];
-      setBuilderHeadline(nextH);
-      showToast("Generated new high-converting headline.");
-    } else {
-      const nextC = aiCopyOptions[Math.floor(Math.random() * aiCopyOptions.length)];
-      setBuilderPrimaryCopy(nextC);
-      showToast("Generated new high-converting ad copy.");
-    }
+  // AI ad copy isn't connected yet; never fill in canned "AI" text.
+  const handleAiWrite = (_field: "headline" | "copy") => {
+    showToast("AI ad copy isn't available yet. Type your own headline and copy.");
   };
 
   // Add to Ready handler
   const handleAddToReady = () => {
+    if (!selectedClip) {
+      showToast("Upload a video first.");
+      return;
+    }
     const newItem: CreativeItem = {
       id: `ad_${Date.now()}`,
       name: `${selectedClip.title} — Meta Creative`,
@@ -305,7 +261,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
       duration: selectedClip.duration,
       hookAngle: builderHeadline,
       cta: builderCta,
-      thumbnail: selectedClip.thumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+      thumbnail: selectedClip.thumbnail || MEDIA_PLACEHOLDER,
       videoUrl: selectedClip.videoUrl,
       status: "ready",
       placements: selectedPlacements.map((p) => {
@@ -319,6 +275,10 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
 
   // Save Draft handler
   const handleSaveDraft = () => {
+    if (!selectedClip) {
+      showToast("Upload a video first.");
+      return;
+    }
     const newItem: CreativeItem = {
       id: `ad_${Date.now()}`,
       name: `${selectedClip.title} — Draft Creative`,
@@ -329,7 +289,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
       duration: selectedClip.duration,
       hookAngle: builderHeadline,
       cta: builderCta,
-      thumbnail: selectedClip.thumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+      thumbnail: selectedClip.thumbnail || MEDIA_PLACEHOLDER,
       videoUrl: selectedClip.videoUrl,
       status: "prepared", // mapped to Draft
       placements: selectedPlacements.map((p) => {
@@ -341,24 +301,13 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
     showToast("Ad saved as draft.");
   };
 
-  // Launch single row
-  const handleLaunchRow = (itemId: string) => {
-    setLibraryItems((prev) =>
-      prev.map((item) => (item.id === itemId ? { ...item, status: "live" } : item))
-    );
-    showToast("Ad launched successfully to connected Meta campaign!");
+  // Launching needs a connected Meta Ads account, which isn't available yet.
+  const handleLaunchRow = (_itemId: string) => {
+    showToast("Launching ads isn't available yet. Connect Meta Ads first.");
   };
-
-  // Launch selected bulk
   const handleLaunchSelected = () => {
     if (selectedRowIds.length === 0) return;
-    setLibraryItems((prev) =>
-      prev.map((item) =>
-        selectedRowIds.includes(item.id) ? { ...item, status: "live" } : item
-      )
-    );
-    showToast(`${selectedRowIds.length} ads launched to connected Meta campaign!`);
-    setSelectedRowIds([]);
+    showToast("Launching ads isn't available yet. Connect Meta Ads first.");
   };
 
   // Helper to switch active campaign and sync stage
@@ -397,282 +346,20 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
     showToast("Campaign approved! Moving to Publish stage.");
   };
 
-  // Handle publishing approved campaign
-  const handlePublishCampaign = (campaignId: string) => {
-    setCampaigns((prev) =>
-      prev.map((c) => {
-        if (c.id === campaignId) {
-          return {
-            ...c,
-            currentStage: "analytics",
-            stageProgress: {
-              ...c.stageProgress,
-              publish: "completed",
-              analytics: "in_progress",
-            },
-            livePerformance: c.livePerformance || {
-              roas: 3.45,
-              spend: 150,
-              revenue: 517.5,
-              ctr: 3.92,
-              cpa: 12.8,
-              impressions: 12400,
-              thumbStopRate: 39.5,
-              retentionAt3s: 61.2,
-              status: "active",
-            },
-          };
-        }
-        return c;
-      })
-    );
-    setSelectedStage("analytics");
-    showToast("Campaign launched! Live analytics stream engaged.");
+  // Publishing, live analytics, the feedback loop and the autonomous pipeline all need real
+  // ad-platform connections and AI generation that aren't built yet. They say so instead of simulating results.
+  const handlePublishCampaign = (_campaignId: string) => {
+    showToast("Publishing campaigns isn't available yet.");
   };
-
-  // Run the AI Autonomous Feedback Loop
-  const handleRunFeedbackLoop = (campaignId: string) => {
-    setIsAutoExecuting(true);
-    setAutoExecuteLog("Analyzing 7-day retention curves & creative drop-offs...");
-
-    setTimeout(() => {
-      setAutoExecuteLog("Diagnosing hook fatigue: Hook #2 drop-off at 0:08 detected. Synthesizing new brief...");
-    }, 700);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Generating 3 new high-tempo hook variations and discount CTA...");
-    }, 1400);
-
-    setTimeout(() => {
-      setIsAutoExecuting(false);
-      setAutoExecuteLog("");
-      setCampaigns((prev) =>
-        prev.map((c) => {
-          if (c.id === campaignId) {
-            const nextCycle = (c.aiFeedbackLoop?.cycleNumber || 1) + 1;
-            return {
-              ...c,
-              currentStage: "approve",
-              stageProgress: {
-                ...c.stageProgress,
-                optimize: "completed",
-                approve: "in_progress",
-              },
-              approvalState: {
-                isApproved: false,
-                complianceNotes: [
-                  `AI Feedback Loop Cycle #${nextCycle} generated`,
-                  "Hook #1 retained, 3 new pattern-interrupt openings generated",
-                  "Awaiting creator approval before launching next test",
-                ],
-              },
-              aiFeedbackLoop: {
-                diagnosticInsight: `Cycle #${nextCycle}: Re-engineered mid-section pacing. Replaced 3-second talking head with dynamic B-roll sequence.`,
-                recommendedAction: "Launch A/B test against baseline champion ad to lower CPA by 15%.",
-                nextIterationGoal: "Achieve 45%+ Thumb-Stop Rate and scale spend to $5,000/week.",
-                generatedNewBriefAt: new Date().toISOString(),
-                cycleNumber: nextCycle,
-              },
-            };
-          }
-          return c;
-        })
-      );
-      setSelectedStage("approve");
-      showToast("AI Feedback Loop Complete: New variants generated and awaiting your approval!");
-    }, 2200);
+  const handleRunFeedbackLoop = (_campaignId: string) => {
+    showToast("The AI feedback loop isn't available yet.");
   };
-
-  // Full Autonomous Pipeline Simulator (From URL / Prompt -> Awaiting Approval)
   const handleRunFullAutonomousPipeline = (
-    targetUrl: string,
-    campaignName: string,
-    promptDirective: string = "Make me a TikTok and Meta campaign"
+    _targetUrl: string,
+    _campaignName: string,
+    _promptDirective: string = ""
   ) => {
-    setIsAutoExecuting(true);
-    setAutoExecuteLog(`Step 1/10: Ingesting URL (${targetUrl || "product link"}) with directive: "${promptDirective}"...`);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 2/10: Conducting AI competitor intel & trending TikTok/Meta hook research...");
-    }, 550);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 3/10: Synthesizing DTC target audience avatar & objection matrix...");
-    }, 1100);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 4/10: Formulating 5 viral hooks & angle variations (CTR > 4.2%)...");
-    }, 1650);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 5/10: Writing 3 complete video scripts with audio/visual cues & CTA...");
-    }, 2200);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 6/10: Generating multitrack creatives, kinetic captions & Astra Post finishing...");
-    }, 2750);
-
-    setTimeout(() => {
-      setAutoExecuteLog("Step 7/10: Generating 9:16 vertical, 1:1 square & 16:9 landscape variants...");
-    }, 3300);
-
-    setTimeout(() => {
-      setIsAutoExecuting(false);
-      setAutoExecuteLog("");
-
-      const generatedHooks = [
-        {
-          id: `hk_1_${Date.now()}`,
-          text: "Why 90% of DTC Video Ads Fail in the First 3 Seconds",
-          hookType: "Negative Hook / Problem Framing",
-          predictedCtr: "4.7%",
-          angle: "Loss Aversion",
-        },
-        {
-          id: `hk_2_${Date.now()}`,
-          text: "How We Generate 20 Video Ads in 15 Minutes without an Agency",
-          hookType: "Case Study & Efficiency",
-          predictedCtr: "4.4%",
-          angle: "Process Teardown",
-        },
-        {
-          id: `hk_3_${Date.now()}`,
-          text: "Stop Paying Agencies $5k for Basic TikTok & Meta Ads",
-          hookType: "Contrarian / Us vs Them",
-          predictedCtr: "4.5%",
-          angle: "Cost Advantage",
-        },
-        {
-          id: `hk_4_${Date.now()}`,
-          text: "The Exact Video Editing Workflow That Scaled Past $100k/Month",
-          hookType: "Direct Result / Aspiration",
-          predictedCtr: "4.8%",
-          angle: "Growth Authority",
-        },
-        {
-          id: `hk_5_${Date.now()}`,
-          text: "If You're Still Cutting Video Ads Manually at 2 AM, Watch This",
-          hookType: "Visceral Creator Pain-Point",
-          predictedCtr: "4.3%",
-          angle: "Relatability",
-        },
-      ];
-
-      const generatedScripts = [
-        {
-          id: `sc_1_${Date.now()}`,
-          title: "Autonomous TikTok & Meta Teardown (Direct Response)",
-          framework: "Problem → Agitation → Solution → CTA",
-          hookText: "Why do 90% of video ads crash and burn in the first 3 seconds? Because you're testing one angle instead of twenty.",
-          bodyText: "ClipFlow turns any product URL into tested creative variations with voiceover, B-roll cutaways, and kinetic captions in under 15 minutes. It even handles Astra post-production color and EBU R128 audio mastering.",
-          ctaText: "Tap below to test your first 5 video ad variations free.",
-          visualCues: ["Pattern interrupt zoom", "Split before/after speed comparison", "Multitrack timeline zoom"],
-        },
-        {
-          id: `sc_2_${Date.now()}`,
-          title: "Behind-the-Scenes DTC Production Walkthrough",
-          framework: "Hook → Curiosity Teardown → Demo → Social Proof → Offer",
-          hookText: "How top direct-to-consumer brands spin 1 raw clip into 20 high-converting creatives without hiring an agency.",
-          bodyText: "Watch: paste your product link, select TikTok and Meta, and ClipFlow drafts 5 tested hooks, writes 3 complete scripts, and formats 9:16 vertical and 1:1 feed cuts ready for review.",
-          ctaText: "Claim your 14-day free pass today. No credit card required.",
-          visualCues: ["Quick UI interaction reel", "Astra color grade swipe", "Export to TikTok Ads badge"],
-        },
-        {
-          id: `sc_3_${Date.now()}`,
-          title: "Agency Cost Disruptor / Contrarian Comparison",
-          framework: "Us vs Them → Proof of Speed → Risk Reversal",
-          hookText: "Stop paying video production agencies $5,000 every time creative fatigue doubles your CPA.",
-          bodyText: "With ClipFlow's autonomous advertising engine, every running ad continuously feeds live analytics back into new creative briefs and automated variants.",
-          ctaText: "Start producing autonomous video ads now with ClipFlow.",
-          visualCues: ["Agency invoice vs ClipFlow dashboard", "Dynamic ROAS curve graphic"],
-        },
-      ];
-
-      const newPipeline: AdCampaignPipelineData = {
-        id: `camp_auto_${Date.now()}`,
-        name: campaignName || `TikTok & Meta: ${newProdName || "Product"}`,
-        productName: newProdName || "Featured Product",
-        productUrl: targetUrl || "https://clipflow.video",
-        productDescription: promptDirective || "Autonomous TikTok & Meta Ad Campaign with 5 hooks and 3 scripts",
-        offer: newOffer || "Free 14-Day Pro Pass",
-        currentStage: "approve",
-        stageProgress: {
-          new_campaign: "completed",
-          product_offer: "completed",
-          research: "completed",
-          audience: "completed",
-          hooks_angles: "completed",
-          scripts: "completed",
-          generate_creatives: "completed",
-          edit: "completed",
-          variations: "completed",
-          approve: "in_progress",
-          publish: "pending",
-          analytics: "pending",
-          optimize: "pending",
-        },
-        goal: newGoal || "get_sales",
-        platforms: ["tiktok", "instagram_reels", "youtube_shorts"],
-        targetAudience: {
-          avatar: "DTC Founders, Marketers & E-Commerce Creators",
-          painPoints: ["Creative fatigue doubling CPA", "Manual video editing burnout", "Agency costs"],
-          desires: ["10 tested variations in minutes", "Sub-$10 customer acquisition", "Full timeline control"],
-          objections: ["Does automated creative convert?", "Can I tweak audio & captions in the timeline?"],
-        },
-        researchIntel: {
-          competitorAngles: ["Most tools produce generic static slideshows without multitrack audio"],
-          trendingHooks: ["Pattern interrupt openings with kinetic text achieve 3.4x higher thumb-stop rate"],
-          viralFormatScore: 95,
-          keySellingPoints: ["Multitrack Timeline Editor", "Astra Post Color & Loudness", "Autonomous Feedback Loop"],
-        },
-        hooks: generatedHooks,
-        scripts: generatedScripts,
-        creatives: [
-          {
-            id: `cr_9x16_${Date.now()}`,
-            name: `${campaignName || "Commercial"}_TikTok_9x16.mp4`,
-            format: "9:16",
-            duration: 30,
-            videoUrl: "",
-            thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
-            hook: "Why 90% of DTC Ads Fail in the First 3 Seconds",
-            cta: "Claim Free Trial",
-            approved: false,
-            status: "awaiting_approval",
-          },
-          {
-            id: `cr_1x1_${Date.now()}`,
-            name: `${campaignName || "Commercial"}_MetaFeed_1x1.mp4`,
-            format: "1:1",
-            duration: 30,
-            videoUrl: "",
-            thumbnailUrl: "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=600&q=80",
-            hook: "How We Generate 20 Video Ads in 15 Minutes without an Agency",
-            cta: "Start Free Trial",
-            approved: false,
-            status: "awaiting_approval",
-          },
-        ],
-        variations: [
-          { id: "v1", type: "aspect_ratio", label: "TikTok & Reels 9:16 Vertical", aspectRatio: "9:16", previewUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80" },
-          { id: "v2", type: "aspect_ratio", label: "Meta Feed 1:1 Square", aspectRatio: "1:1", previewUrl: "https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=600&q=80" },
-          { id: "v3", type: "aspect_ratio", label: "YouTube 16:9 Landscape", aspectRatio: "16:9", previewUrl: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80" },
-        ],
-        approvalState: {
-          isApproved: false,
-          complianceNotes: [
-            "Autonomous pipeline completed all stages (Research → 5 Hooks → 3 Scripts → Creatives → Variations)",
-            "Awaiting creator review and approval before publishing to TikTok Ads or Meta Ads",
-            "Human-in-the-loop requirement satisfied: No ad spends money without explicit user approval",
-          ],
-        },
-      };
-
-      setCampaigns((prev) => [newPipeline, ...prev]);
-      setActiveCampaignId(newPipeline.id);
-      setSelectedStage("approve");
-      showToast("Autonomous production completed! 5 Hooks & 3 Scripts generated. Placed in Awaiting Approval.");
-    }, 3600);
+    showToast("Automatic campaign generation isn't available yet.");
   };
 
   // Handoff to ClipFlow Timeline Editor
@@ -686,7 +373,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
       type: "clipper",
       status: "completed",
       sourceVideoUrl: creative.videoUrl || "",
-      sourceThumbnail: creative.thumbnailUrl || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+      sourceThumbnail: creative.thumbnailUrl || MEDIA_PLACEHOLDER,
       createdAt: new Date().toISOString(),
       updatedAt: "Just now",
     };
@@ -887,7 +574,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
                     >
                       <div className="relative aspect-video rounded-[4px] overflow-hidden bg-black mb-1.5">
                         <img
-                          src={clip.thumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80"}
+                          src={clip.thumbnail || MEDIA_PLACEHOLDER}
                           alt={clip.title}
                           className="w-full h-full object-cover"
                         />
@@ -1108,7 +795,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-gray-400 font-mono">
-                      Clip: {selectedClip.title.slice(0, 16)}...
+                      Clip: {selectedClip ? `${selectedClip.title.slice(0, 16)}...` : "None"}
                     </span>
                   </div>
                 </div>
@@ -1250,7 +937,7 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
 
                     <div className="flex justify-center py-1">
                       <AdPhonePreview
-                        thumbnail={selectedClip.thumbnail || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80"}
+                        thumbnail={selectedClip?.thumbnail || MEDIA_PLACEHOLDER}
                         headline={builderHeadline}
                         primaryCopy={builderPrimaryCopy}
                         ctaText={builderCta}
@@ -1354,6 +1041,24 @@ export const AdStudioView: React.FC<AdStudioViewProps> = ({
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (COMING_SOON_AD_WORKFLOWS.has(activeWorkflow)) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center bg-[#07090E] text-white p-8 text-center gap-3">
+        <Megaphone className="w-8 h-8 text-[#3A4256]" />
+        <p className="text-sm font-semibold text-white">Coming soon</p>
+        <p className="text-xs text-[#8F9CAE] max-w-sm">
+          This ad tool needs Meta, TikTok or Google Ads connected, which isn't set up yet. Clips → Ads, Ad Preview and the Creative Library work now.
+        </p>
+        <button
+          onClick={() => setActiveWorkflow("hub")}
+          className="mt-1 px-3 py-1.5 rounded-lg bg-[#171C27] hover:bg-[#202738] border border-[#272D3A] text-xs text-gray-200 cursor-pointer"
+        >
+          Back to Ad Studio
+        </button>
       </div>
     );
   }

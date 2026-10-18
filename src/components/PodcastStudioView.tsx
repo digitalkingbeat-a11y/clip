@@ -66,6 +66,8 @@ interface PodcastStudioViewProps {
   initialSessionId?: string | null;
   onSessionSavedToProjects?: (project: Project) => void;
   onTracksAddedToMediaLibrary?: (tracks: any[]) => void;
+  /** Signed-out visitor who opened a guest invite link: only the join box is shown. */
+  guestOnly?: boolean;
 }
 
 export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
@@ -75,6 +77,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   initialSessionId,
   onSessionSavedToProjects,
   onTracksAddedToMediaLibrary,
+  guestOnly = false,
 }) => {
   const currentHostName = (() => {
     try {
@@ -89,7 +92,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   const [activeSession, setActiveSession] = useState<PodcastSession | null>(null);
   const [userRole, setUserRole] = useState<"host" | "guest">("host");
   const [participantName, setParticipantName] = useState<string>(currentHostName);
-  const [guestJoinName, setGuestJoinName] = useState<string>("John Knox (Guest)");
+  const [guestJoinName, setGuestJoinName] = useState<string>("");
 
   // Hardware Setup State
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -123,7 +126,8 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   const [lastCutNotice, setLastCutNotice] = useState<{ label: string; timestamp: number } | null>(null);
   const [autoDirector, setAutoDirector] = useState<boolean>(false);
   const [switchTransition, setSwitchTransition] = useState<"cut" | "dissolve">("cut");
-  const [coHostJoinName] = useState<string>("Sarah Lin (Producer / Reaction)");
+  const coHostJoinName = "Co-host";
+  const guestLabel = guestJoinName.trim() || "Guest";
   const [finalizedProject, setFinalizedProject] = useState<Project | null>(null);
   const guest2VideoRef = useRef<HTMLVideoElement | null>(null);
   const recordingStartTimeRef = useRef<number | null>(null);
@@ -137,10 +141,13 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const chunkIndexRef = useRef<number>(0);
+  // This browser's participant id in the session (host entry, or the id returned when a guest joins).
+  const [myParticipantId, setMyParticipantId] = useState<string | null>(null);
+  const failedChunksRef = useRef<Array<{ idx: number; blob: Blob }>>([]);
+  const [localRecordingUrl, setLocalRecordingUrl] = useState<string | null>(null);
 
   // Upload & Recovery Status
   const [hostUploadPct, setHostUploadPct] = useState<number>(100);
-  const [guestUploadPct, setGuestUploadPct] = useState<number>(100);
   const [chunksRecordedCount, setChunksRecordedCount] = useState<number>(0);
   const [chunksUploadedCount, setChunksUploadedCount] = useState<number>(0);
   const [isUploadResuming, setIsUploadResuming] = useState<boolean>(false);
@@ -148,14 +155,23 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   // Invitation & UI Modals
   const [copiedInvite, setCopiedInvite] = useState<boolean>(false);
   const [isInviteEmailModalOpen, setIsInviteEmailModalOpen] = useState<boolean>(false);
-  const [recipientEmail, setRecipientEmail] = useState<string>("john.knox@interviewguest.com");
-  const [emailSendingStatus, setEmailSendingStatus] = useState<"idle" | "sending" | "sent">("idle");
+  const [recipientEmail, setRecipientEmail] = useState<string>("");
   const [isPricingModalOpen, setIsPricingModalOpen] = useState<boolean>(false);
   const [isBackendRequirementsOpen, setIsBackendRequirementsOpen] = useState<boolean>(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [joinCode, setJoinCode] = useState<string>("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Peer-to-Peer Multi-tab BroadcastChannel
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+  // Attach this browser's live camera to any <video> tile (several tiles can show it at once).
+  const attachLocalStream = useCallback(
+    (el: HTMLVideoElement | null) => {
+      if (el && localStream && el.srcObject !== localStream) el.srcObject = localStream;
+    },
+    [localStream]
+  );
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -167,10 +183,10 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     const params = new URLSearchParams(window.location.search);
     const sessionParam = params.get("podcastSession") || params.get("join") || initialSessionId;
     if (sessionParam) {
-      handleJoinSessionByInvite(sessionParam);
-    } else {
-      fetchSessions();
+      // Guest link: prefill the code and let the guest type their name before joining.
+      setJoinCode(sessionParam);
     }
+    if (!guestOnly) fetchSessions();
   }, [initialSessionId]);
 
   // Fetch all existing sessions
@@ -181,10 +197,6 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
         const data = await res.json();
         if (data.success && Array.isArray(data.sessions)) {
           setSessionList(data.sessions);
-          if (data.sessions.length > 0 && !activeSession) {
-            // Seed first session as default preview
-            setActiveSession(data.sessions[0]);
-          }
         }
       }
     } catch (err) {
@@ -192,73 +204,38 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     }
   };
 
-  // Join session by invite link
+  // Join session by invite link (guest). Opens the session and registers this browser as a guest.
   const handleJoinSessionByInvite = async (sessionIdOrCode: string) => {
+    const code = String(sessionIdOrCode || "").trim();
+    setJoinError(null);
+    if (!code) {
+      setJoinError("Paste the invite link or code your host sent you.");
+      return;
+    }
+    // Accept a full invite link as well as a bare id/code.
+    const fromLink = code.match(/[?&](?:podcastSession|join)=([^&#]+)/);
+    const idOrCode = decodeURIComponent(fromLink ? fromLink[1] : code);
     try {
-      const res = await fetch(`/api/podcast/sessions/${sessionIdOrCode}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.session) {
-          setActiveSession(data.session);
-          setUserRole("guest");
-          setCurrentStep("setup");
-          showToast(`Joined session: "${data.session.title}" as Guest`);
-          return;
-        }
+      const res = await fetch(`/api/podcast/sessions/${encodeURIComponent(idOrCode)}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: guestJoinName.trim() || "Guest" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.session) {
+        setActiveSession(data.session);
+        setMyParticipantId(data.participant?.id || null);
+        setUserRole("guest");
+        setCurrentStep("setup");
+        broadcastChannelRef.current?.postMessage({ type: "GUEST_JOINED" });
+        showToast(`Joined "${data.session.title}" as a guest`);
+        return;
       }
+      setJoinError(data.error || "That session wasn't found. Check the link with your host.");
     } catch (e) {
       console.warn("Error joining session:", e);
+      setJoinError("Couldn't reach the studio. Check your connection and try again.");
     }
-    // Fallback if not found yet: seed active session
-    const fallbackSession: PodcastSession = {
-      id: sessionIdOrCode,
-      title: "Double-Ender Interview with John Knox",
-      hostId: "host_01",
-      hostName: currentHostName,
-      inviteCode: sessionIdOrCode.slice(-6).toUpperCase(),
-      inviteUrl: `${window.location.origin}/?podcastSession=${sessionIdOrCode}`,
-      status: "setup",
-      quality: "1080p",
-      audioFormat: "wav_uncompressed",
-      createdAt: new Date().toISOString(),
-      recordingDurationSec: 0,
-      participants: [
-        {
-          id: "p_host",
-          name: currentHostName,
-          role: "host",
-          avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80",
-          isMuted: false,
-          isVideoOff: false,
-          audioLevel: 68,
-          connectionStatus: "connected",
-          chunksRecorded: 0,
-          chunksUploaded: 0,
-          uploadPercentage: 100,
-          isUploading: false,
-        },
-        {
-          id: "p_guest",
-          name: guestJoinName,
-          role: "guest",
-          avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80",
-          isMuted: false,
-          isVideoOff: false,
-          audioLevel: 55,
-          connectionStatus: "connected",
-          chunksRecorded: 0,
-          chunksUploaded: 0,
-          uploadPercentage: 100,
-          isUploading: false,
-        },
-      ],
-      tracks: [],
-      transcript: [],
-      aiClips: [],
-    };
-    setActiveSession(fallbackSession);
-    setUserRole("guest");
-    setCurrentStep("setup");
   };
 
   // Hardware Device Discovery & MediaStream Init
@@ -406,7 +383,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
         case "cam_host":
           return `Cam 1: ${participantName} (Host)`;
         case "cam_guest":
-          return `Cam 2: ${guestJoinName}`;
+          return `Cam 2: ${guestLabel}`;
         case "cam_guest_2":
           return `Cam 3: ${coHostJoinName}`;
         case "cam_split":
@@ -417,7 +394,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
           return "Studio Program Feed";
       }
     },
-    [participantName, guestJoinName, coHostJoinName]
+    [participantName, guestLabel, coHostJoinName]
   );
 
   const getCameraSpeaker = useCallback(
@@ -426,18 +403,18 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
         case "cam_host":
           return participantName;
         case "cam_guest":
-          return guestJoinName;
+          return guestLabel;
         case "cam_guest_2":
-          return "Sarah Lin";
+          return coHostJoinName;
         case "cam_split":
-          return `${participantName} & ${guestJoinName}`;
+          return `${participantName} & ${guestLabel}`;
         case "cam_gallery":
           return "All Participants";
         default:
           return "Program Feed";
       }
     },
-    [participantName, guestJoinName]
+    [participantName, guestLabel]
   );
 
   // Broadcast switcher click tone
@@ -615,7 +592,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: `Double-Ender Interview with John Knox`,
+          title: `Interview ${new Date().toLocaleDateString()}`,
           quality: recordingQuality,
           audioFormat,
         }),
@@ -624,9 +601,10 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
         const data = await res.json();
         if (data.success && data.session) {
           setActiveSession(data.session);
+          setMyParticipantId((data.session.participants || []).find((p: any) => p.role === "host")?.id || null);
           setUserRole("host");
           setCurrentStep("setup");
-          showToast(`Session created! Copy invite link or email John Knox.`);
+          showToast("Session created! Copy the guest link to invite someone.");
           fetchSessions();
         }
       }
@@ -636,9 +614,10 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
   };
 
   // Copy Invitation Link
-  const handleCopyInviteLink = () => {
-    if (!activeSession) return;
-    const url = `${window.location.origin}/?podcastSession=${activeSession.id}`;
+  const handleCopyInviteLink = (target?: PodcastSession | React.MouseEvent) => {
+    const sess = target && (target as PodcastSession).id ? (target as PodcastSession) : activeSession;
+    if (!sess) return;
+    const url = `${window.location.origin}/?podcastSession=${sess.id}`;
     navigator.clipboard.writeText(url).then(() => {
       setCopiedInvite(true);
       showToast("Guest invitation link copied to clipboard!");
@@ -646,31 +625,16 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     });
   };
 
-  // Send Email Invite
-  const handleSendEmailInvite = async () => {
-    if (!activeSession || !recipientEmail) return;
-    setEmailSendingStatus("sending");
-    try {
-      const res = await fetch(`/api/podcast/sessions/${activeSession.id}/invite-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: recipientEmail,
-          message: "You're invited to record a studio-quality double-ender interview on ClipFlow.",
-        }),
-      });
-      if (res.ok) {
-        setEmailSendingStatus("sent");
-        showToast(`Invitation sent to ${recipientEmail}!`);
-        setTimeout(() => {
-          setIsInviteEmailModalOpen(false);
-          setEmailSendingStatus("idle");
-        }, 1500);
-      }
-    } catch (e) {
-      setEmailSendingStatus("idle");
-      showToast("Error sending email. Use Copy Link instead.");
-    }
+  // Email invite: opens the host's own mail app with the guest link filled in.
+  // (ClipFlow doesn't send email on your behalf yet, so we never claim it was sent.)
+  const handleSendEmailInvite = () => {
+    if (!activeSession || !recipientEmail.trim()) return;
+    const link = `${window.location.origin}/?podcastSession=${activeSession.id}`;
+    const subject = `Join me on ClipFlow: ${activeSession.title}`;
+    const body = `You're invited to record "${activeSession.title}" with ${participantName} on ClipFlow.\n\nJoin in your browser (no account needed):\n${link}`;
+    window.location.href = `mailto:${encodeURIComponent(recipientEmail.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    setIsInviteEmailModalOpen(false);
+    showToast("Opened your email app with the invite.");
   };
 
   // Countdown & Audio Clapper
@@ -729,6 +693,12 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     recordingStartTimeRef.current = Date.now();
     chunkIndexRef.current = 0;
     recordedChunksRef.current = [];
+    failedChunksRef.current = [];
+    setChunksRecordedCount(0);
+    setChunksUploadedCount(0);
+    setHostUploadPct(100);
+    if (localRecordingUrl) URL.revokeObjectURL(localRecordingUrl);
+    setLocalRecordingUrl(null);
 
     // Automatically record the initial t=0 cut for the active camera
     const initialCut: LiveSwitchEvent = {
@@ -786,7 +756,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
             if (activeSession) {
               const formData = new FormData();
               formData.append("chunk", e.data, `chunk_${currentIdx}.webm`);
-              formData.append("participantId", userRole);
+              formData.append("participantId", myParticipantId || "");
               formData.append("trackType", "video");
               formData.append("chunkIndex", String(currentIdx));
 
@@ -797,13 +767,14 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                 });
                 if (res.ok) {
                   setChunksUploadedCount((prev) => prev + 1);
-                  setHostUploadPct(100);
-                  setGuestUploadPct(100);
+                } else {
+                  failedChunksRef.current.push({ idx: currentIdx, blob: e.data });
                 }
               } catch (uploadErr) {
                 console.warn("Chunk upload failed, chunk preserved in memory for recovery:", uploadErr);
-                setHostUploadPct(92);
+                failedChunksRef.current.push({ idx: currentIdx, blob: e.data });
               }
+              setHostUploadPct(Math.round(((chunkIndexRef.current - failedChunksRef.current.length) / Math.max(1, chunkIndexRef.current)) * 100));
             }
           }
         };
@@ -831,7 +802,16 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
+      const rec = mediaRecorderRef.current;
+      await new Promise<void>((resolve) => {
+        rec.addEventListener("stop", () => resolve(), { once: true });
+        rec.stop();
+        setTimeout(resolve, 1500);
+      });
+    }
+    if (recordedChunksRef.current.length > 0) {
+      const blob = new Blob(recordedChunksRef.current, { type: recordedChunksRef.current[0]?.type || "video/webm" });
+      setLocalRecordingUrl(URL.createObjectURL(blob));
     }
 
     if (activeSession) {
@@ -860,7 +840,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     }
 
     setCurrentStep("post_recording");
-    showToast(`Session recorded with ${liveSwitchEvents.length} live camera cuts logged!`);
+    showToast(liveSwitchEvents.length > 0 ? `Recording saved • ${liveSwitchEvents.length} camera cuts logged` : "Recording saved");
   };
 
   // Format Duration seconds -> MM:SS
@@ -870,185 +850,39 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  // Resume Uploads for disconnected chunks
+  // Resume Uploads: re-send any chunks that failed to upload during recording
   const handleResumeUploads = async () => {
+    if (!activeSession || failedChunksRef.current.length === 0) return;
     setIsUploadResuming(true);
-    showToast("Resuming chunk upload from local cache...");
-    setTimeout(() => {
-      setHostUploadPct(100);
-      setGuestUploadPct(100);
-      setIsUploadResuming(false);
-      showToast("All chunks verified and synchronized to 100%!");
-    }, 1500);
+    const pending = [...failedChunksRef.current];
+    failedChunksRef.current = [];
+    for (const item of pending) {
+      const formData = new FormData();
+      formData.append("chunk", item.blob, `chunk_${item.idx}.webm`);
+      formData.append("participantId", myParticipantId || "");
+      formData.append("trackType", "video");
+      formData.append("chunkIndex", String(item.idx));
+      try {
+        const res = await fetch(`/api/podcast/sessions/${activeSession.id}/chunks`, { method: "POST", body: formData });
+        if (res.ok) setChunksUploadedCount((prev) => prev + 1);
+        else failedChunksRef.current.push(item);
+      } catch {
+        failedChunksRef.current.push(item);
+      }
+    }
+    const total = Math.max(1, chunkIndexRef.current);
+    setHostUploadPct(Math.round(((total - failedChunksRef.current.length) / total) * 100));
+    setIsUploadResuming(false);
+    showToast(failedChunksRef.current.length === 0 ? "All chunks uploaded." : `${failedChunksRef.current.length} chunks still waiting. Try again in a moment.`);
   };
 
-  // Send to VEGAS Pro Multitrack Editor with Live Switch metadata track
+  // Open in the multitrack editor: only once the server has built a real project from the uploaded tracks.
   const handleSendToEditor = () => {
     if (finalizedProject) {
       onNavigateToEditor(finalizedProject);
       return;
     }
-
-    const hostVideoUrl = "/storage/uploads/sample_test.mp4";
-    const guestVideoUrl = "";
-    const duration = Math.max(15, activeSession?.recordingDurationSec || recordTimerSec || 30);
-    const switches =
-      liveSwitchEvents.length > 0
-        ? liveSwitchEvents
-        : [
-            {
-              id: "sw_1",
-              timestamp: 0,
-              camera: "cam_host" as CameraSourceId,
-              label: `Cam 1: ${participantName}`,
-              speakerName: participantName,
-              transition: "cut" as const,
-            },
-            {
-              id: "sw_2",
-              timestamp: 5.5,
-              camera: "cam_guest" as CameraSourceId,
-              label: `Cam 2: ${guestJoinName}`,
-              speakerName: guestJoinName,
-              transition: "cut" as const,
-            },
-            {
-              id: "sw_3",
-              timestamp: 12.0,
-              camera: "cam_host" as CameraSourceId,
-              label: `Cam 1: ${participantName}`,
-              speakerName: participantName,
-              transition: "cut" as const,
-            },
-            {
-              id: "sw_4",
-              timestamp: 18.0,
-              camera: "cam_split" as CameraSourceId,
-              label: "Dual Split",
-              speakerName: "Host & Guest",
-              transition: "cut" as const,
-            },
-          ];
-
-    // Build the sliced items for track_live_switch
-    const liveSwitchItems: any[] = switches.map((cur, i) => {
-      const nextTime = i < switches.length - 1 ? switches[i + 1].timestamp : duration;
-      const segDuration = Math.max(0.4, Number((nextTime - cur.timestamp).toFixed(2)));
-      const isHost = cur.camera === "cam_host";
-      return {
-        id: `sw_cut_${activeSession?.id || "demo"}_${i}`,
-        trackId: "track_live_switch",
-        type: "video" as const,
-        name: `[LIVE CUT] ${cur.label}`,
-        startTime: cur.timestamp,
-        duration: segDuration,
-        sourceStartTime: cur.timestamp,
-        sourceUrl: isHost ? hostVideoUrl : guestVideoUrl,
-        scale: 100,
-        posX: 0,
-        posY: 0,
-        volume: 100,
-      };
-    });
-
-    const markerItems: any[] = switches.map((cur, i) => {
-      const nextTime = i < switches.length - 1 ? switches[i + 1].timestamp : duration;
-      const segDuration = Math.max(0.4, Number((nextTime - cur.timestamp).toFixed(2)));
-      return {
-        id: `sw_marker_${activeSession?.id || "demo"}_${i}`,
-        trackId: "track_text",
-        type: "text" as const,
-        name: `Marker: ${cur.label}`,
-        text: `● ${cur.label.toUpperCase()}`,
-        startTime: cur.timestamp,
-        duration: Math.min(3.0, segDuration),
-        posX: 50,
-        posY: 88,
-        color: cur.camera === "cam_host" ? "#16D9F5" : "#A855F7",
-      };
-    });
-
-    const multitrackProj: any = {
-      id: activeSession?.projectId || `proj_pod_${activeSession?.id || Date.now()}`,
-      name: `${activeSession?.title || "Podcast Interview"} (Multitrack Edit)`,
-      type: "clipper",
-      status: "completed",
-      duration,
-      aspectRatio: "16:9",
-      sourceVideoUrl: hostVideoUrl,
-      sourceThumbnail: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=600&q=80",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      clipsCount: 2,
-      approvedClipsCount: 0,
-      podcastSessionId: activeSession?.id,
-      liveSwitchEvents: switches,
-      timelineTracks: [
-        { id: "track_live_switch", name: "Live Switch (Program Mix)", type: "video", visible: true, locked: false, height: 60, color: "#FF4081" },
-        { id: "track_video", name: `${participantName} (Host 4K Cam)`, type: "video", visible: true, locked: false, height: 56, color: "#16D9F5" },
-        { id: "track_broll", name: `${guestJoinName} (Guest 4K Cam)`, type: "broll", visible: true, locked: false, height: 56, color: "#A855F7" },
-        { id: "track_text", name: "Camera Cut Markers & Lower Thirds", type: "text", visible: true, locked: false, height: 44, color: "#F59E0B" },
-        { id: "track_captions", name: "AI Dual-Speaker Captions", type: "captions", visible: true, locked: false, height: 44, color: "#10B981" },
-        { id: "track_music", name: `${participantName} (Host Audio Stem)`, type: "music", visible: true, locked: false, height: 48, color: "#06B6D4" },
-        { id: "track_voice", name: `${guestJoinName} (Guest Audio Stem)`, type: "voice", visible: true, locked: false, height: 48, color: "#8B5CF6" },
-      ],
-      timelineItems: [
-        ...liveSwitchItems,
-        {
-          id: `item_host_vid`,
-          trackId: "track_video",
-          type: "video" as const,
-          name: `${participantName}_Cam_Isolated.mp4`,
-          startTime: 0,
-          duration,
-          sourceStartTime: 0,
-          sourceUrl: hostVideoUrl,
-          scale: 100,
-          posX: 0,
-          posY: 0,
-          volume: 100,
-        },
-        {
-          id: `item_guest_vid`,
-          trackId: "track_broll",
-          type: "broll" as const,
-          name: `${guestJoinName}_Cam_Isolated.mp4`,
-          startTime: 0,
-          duration,
-          sourceStartTime: 0,
-          sourceUrl: guestVideoUrl,
-          scale: 100,
-          posX: 0,
-          posY: 0,
-          volume: 100,
-        },
-        ...markerItems,
-        {
-          id: `item_host_aud`,
-          trackId: "track_music",
-          type: "music" as const,
-          name: `${participantName}_WAV_Stem.wav`,
-          startTime: 0,
-          duration,
-          sourceStartTime: 0,
-          sourceUrl: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-          volume: 100,
-        },
-        {
-          id: `item_guest_aud`,
-          trackId: "track_voice",
-          type: "voice" as const,
-          name: `${guestJoinName}_WAV_Stem.wav`,
-          startTime: 0,
-          duration,
-          sourceStartTime: 0,
-          sourceUrl: "https://actions.google.com/sounds/v1/weather/rain_heavy.ogg",
-          volume: 100,
-        },
-      ],
-    };
-
-    onNavigateToEditor(multitrackProj);
+    showToast("Multitrack export isn't available yet. Download your recording below.");
   };
 
   return (
@@ -1116,6 +950,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
       {currentStep === "lobby" && (
         <div className="flex-1 p-6 max-w-5xl mx-auto w-full space-y-6">
           {/* Hero Welcome Banner */}
+          {!guestOnly && (
           <div className="bg-gradient-to-r from-[#111624] via-[#141B2B] to-[#111624] border border-[#272D3A] rounded-2xl p-6 shadow-xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-80 h-80 bg-[#168CFF]/10 rounded-full blur-3xl pointer-events-none" />
             <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
@@ -1124,7 +959,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   Studio-Quality Double-Ender Recording
                 </span>
                 <h1 className="text-2xl font-black text-white tracking-tight">
-                  Record pristine interviews with John Knox and remote guests.
+                  Record studio-quality interviews with remote guests.
                 </h1>
                 <p className="text-xs text-[#8F9CAE] leading-relaxed">
                   Both host and guest record full uncompressed audio and 4K camera locally on their own devices. Live conversation stays smooth, and when the interview wraps, separate synchronized tracks land straight in your VEGAS Pro timeline and AI Clips engine.
@@ -1144,6 +979,8 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
             </div>
           </div>
 
+          )}
+
           {/* Guest Direct Join Box (No Account Required) */}
           <div className="bg-[#11151E] border border-[#272D3A] rounded-xl p-5 space-y-3">
             <div className="flex items-center justify-between">
@@ -1156,25 +993,31 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <input
                 type="text"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                placeholder="Invite link or code"
+                className="flex-1 bg-[#171C27] border border-[#272D3A] rounded-lg px-3.5 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#16D9F5]"
+              />
+              <input
+                type="text"
                 value={guestJoinName}
                 onChange={(e) => setGuestJoinName(e.target.value)}
-                placeholder="Enter your name (e.g. John Knox)"
+                placeholder="Your name"
                 className="flex-1 bg-[#171C27] border border-[#272D3A] rounded-lg px-3.5 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#16D9F5]"
               />
               <button
-                onClick={() => {
-                  const targetSess = activeSession?.id || (sessionList[0] ? sessionList[0].id : `sess_demo_${Date.now()}`);
-                  handleJoinSessionByInvite(targetSess);
-                }}
+                onClick={() => handleJoinSessionByInvite(joinCode)}
                 className="w-full sm:w-auto px-4 py-2 rounded-lg bg-[#171C27] hover:bg-[#202738] border border-[#16D9F5]/40 text-[#16D9F5] hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
               >
                 <span>Enter Green Room</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
+            {joinError && <p className="text-[11px] text-rose-300">{joinError}</p>}
           </div>
 
-          {/* Recent Sessions List */}
+          {/* Recent Sessions List (your own sessions only) */}
+          {!guestOnly && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-bold uppercase tracking-wider text-[#8F9CAE]">
@@ -1187,6 +1030,13 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                 <RefreshCw className="w-3 h-3" /> Refresh
               </button>
             </div>
+
+            {sessionList.length === 0 && (
+              <div className="bg-[#11151E] border border-dashed border-[#272D3A] rounded-xl p-6 text-center">
+                <p className="text-sm font-semibold text-gray-300">No sessions yet</p>
+                <p className="text-xs text-[#6B7385] mt-1">Start a new session, then copy the guest link to invite someone.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {sessionList.map((sess) => (
@@ -1212,7 +1062,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                       <span>•</span>
                       <span>Quality: {sess.quality.toUpperCase()}</span>
                       <span>•</span>
-                      <span>{sess.participants?.length || 2} participants</span>
+                      <span>{sess.participants?.length || 1} participants</span>
                     </p>
                   </div>
 
@@ -1220,6 +1070,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     <button
                       onClick={() => {
                         setActiveSession(sess);
+                        setMyParticipantId((sess.participants || []).find((p: any) => p.role === "host")?.id || null);
                         setUserRole("host");
                         setCurrentStep("setup");
                       }}
@@ -1232,7 +1083,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     <button
                       onClick={() => {
                         setActiveSession(sess);
-                        handleCopyInviteLink();
+                        handleCopyInviteLink(sess);
                       }}
                       className="text-[11px] text-gray-400 hover:text-white flex items-center gap-1 cursor-pointer p-1 rounded hover:bg-white/5"
                       title="Copy guest link"
@@ -1245,6 +1096,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
               ))}
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1578,34 +1430,22 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                       className={`w-full h-full object-cover ${!isCameraActive ? "hidden" : ""}`}
                     />
                   ) : activeCamera === "cam_guest" ? (
-                    <video
-                      ref={guestVideoRef}
-                      src=""
-                      autoPlay
-                      playsInline
-                      loop
-                      muted
-                      className="w-full h-full object-cover"
-                    />
+                    <div className="flex flex-col items-center gap-1 text-center">
+                      <Users className="w-8 h-8 text-[#3A4256]" />
+                      <span className="text-sm font-semibold text-gray-400">Waiting for guest</span>
+                      <span className="text-[11px] text-[#6B7385]">Share the guest link to invite someone</span>
+                    </div>
                   ) : activeCamera === "cam_guest_2" ? (
-                    <video
-                      ref={guest2VideoRef}
-                      src=""
-                      autoPlay
-                      playsInline
-                      loop
-                      muted
-                      className="w-full h-full object-cover"
-                    />
+                    <span className="text-sm font-semibold text-gray-500">No co-host connected</span>
                   ) : (
                     /* Dual Split preview inside speaker mode */
                     <div className="w-full h-full grid grid-cols-2 gap-2 p-2">
                       <div className="bg-[#11151E] rounded-xl overflow-hidden relative">
-                        <video autoPlay playsInline muted className="w-full h-full object-cover" src="/storage/uploads/sample_test.mp4" />
+                        <video ref={attachLocalStream} autoPlay playsInline muted className="w-full h-full object-cover" />
                         <span className="absolute bottom-2 left-2 text-[10px] font-bold text-white bg-black/70 px-2 py-0.5 rounded">{participantName}</span>
                       </div>
                       <div className="bg-[#11151E] rounded-xl overflow-hidden relative">
-                        <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
+                        <div className="w-full h-full flex items-center justify-center text-[#3A4256]"><Users className="w-5 h-5" /></div>
                         <span className="absolute bottom-2 left-2 text-[10px] font-bold text-white bg-black/70 px-2 py-0.5 rounded">{guestJoinName}</span>
                       </div>
                     </div>
@@ -1634,7 +1474,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {activeCamera === "cam_host" && (
                       <span className="absolute bottom-1 right-1 z-10 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                     )}
-                    <video autoPlay playsInline muted className="w-full h-full object-cover" src="/storage/uploads/sample_test.mp4" />
+                    <video ref={attachLocalStream} autoPlay playsInline muted className="w-full h-full object-cover" />
                   </div>
 
                   {/* Guest 1 Thumb */}
@@ -1650,7 +1490,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {activeCamera === "cam_guest" && (
                       <span className="absolute bottom-1 right-1 z-10 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                     )}
-                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
+                    <div className="w-full h-full flex items-center justify-center text-[#3A4256]"><Users className="w-5 h-5" /></div>
                   </div>
 
                   {/* Guest 2 / Co-Host Thumb */}
@@ -1661,12 +1501,12 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     }`}
                   >
                     <div className="absolute top-1 left-1 z-10 px-1 py-0.2 rounded bg-black/80 text-[8px] font-mono font-bold text-white">
-                      [3] Sarah
+                      [3] Co-host
                     </div>
                     {activeCamera === "cam_guest_2" && (
                       <span className="absolute bottom-1 right-1 z-10 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                     )}
-                    <video autoPlay playsInline loop muted className="w-full h-full object-cover" src="" />
+                    <div className="w-full h-full flex items-center justify-center text-[#3A4256]"><Users className="w-5 h-5" /></div>
                   </div>
 
                   {/* Split Thumb */}
@@ -1774,7 +1614,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   </div>
                 </div>
 
-                {/* Card 2: Cam 2 - Guest Participant (John Knox) */}
+                {/* Card 2: Cam 2 - Guest Participant */}
                 <div
                   onClick={() => handleSwitchCamera("cam_guest")}
                   className={`relative bg-black rounded-2xl overflow-hidden border-2 shadow-2xl flex items-center justify-center transition-all cursor-pointer group ${
@@ -1782,7 +1622,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                       ? "border-rose-500 shadow-[0_0_25px_rgba(244,63,94,0.45)] ring-2 ring-rose-500"
                       : "border-[#272D3A] hover:border-rose-400/70"
                   }`}
-                  title="Click to switch live program feed to Cam 2 (John Knox)"
+                  title="Click to switch live program feed to Cam 2 (guest)"
                 >
                   {/* On-Air / Preview Tally Light Badge */}
                   <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5">
@@ -1807,13 +1647,17 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   {/* Guest Video */}
                   <video
                     ref={guestVideoRef}
-                    src=""
                     autoPlay
                     playsInline
                     loop
                     muted
                     className="w-full h-full object-cover"
                   />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-center pointer-events-none">
+                    <Users className="w-7 h-7 text-[#3A4256]" />
+                    <span className="text-xs font-semibold text-gray-400">Waiting for guest</span>
+                    <span className="text-[10px] text-[#6B7385]">Share the guest link to invite someone</span>
+                  </div>
 
                   {/* Hover Prompt to Switch */}
                   {activeCamera !== "cam_guest" && (
@@ -1837,7 +1681,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     <div className="flex items-center gap-3">
                       <div className="w-20 h-2 bg-[#1C222E] rounded-full overflow-hidden border border-white/20">
                         <div
-                          style={{ width: `${guestAudioLevel || 62}%` }}
+                          style={{ width: `${guestAudioLevel || 0}%` }}
                           className="h-full bg-emerald-400 transition-all duration-75"
                         />
                       </div>
@@ -1848,7 +1692,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   </div>
                 </div>
 
-                {/* Card 3: Cam 3 - Co-Host / Reaction Cam (Sarah Lin - Producer) (shown in grid view) */}
+                {/* Card 3: Cam 3 - Co-Host / Reaction Cam (shown in grid view) */}
                 {studioLayout === "grid" && (
                   <div
                     onClick={() => handleSwitchCamera("cam_guest_2")}
@@ -1857,7 +1701,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                         ? "border-rose-500 shadow-[0_0_25px_rgba(244,63,94,0.45)] ring-2 ring-rose-500"
                         : "border-[#272D3A] hover:border-rose-400/70"
                     }`}
-                    title="Click to switch live program feed to Cam 3 (Sarah Lin)"
+                    title="Click to switch live program feed to Cam 3 (co-host)"
                   >
                     {/* On-Air / Preview Tally Light Badge */}
                     <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5">
@@ -1882,13 +1726,15 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                     {/* Reaction / Co-Host Video Stream */}
                     <video
                       ref={guest2VideoRef}
-                      src=""
                       autoPlay
                       playsInline
                       loop
                       muted
                       className="w-full h-full object-cover"
                     />
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <span className="text-xs font-semibold text-gray-500">No co-host connected</span>
+                    </div>
 
                     {/* Hover Prompt to Switch */}
                     {activeCamera !== "cam_guest_2" && (
@@ -1905,14 +1751,14 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-xs font-bold text-white truncate">{coHostJoinName}</span>
                         <span className="text-[9px] font-mono px-1 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded uppercase">
-                          Producer
+                          Co-host
                         </span>
                       </div>
 
                       <div className="flex items-center gap-3">
                         <div className="w-20 h-2 bg-[#1C222E] rounded-full overflow-hidden border border-white/20">
                           <div
-                            style={{ width: `48%` }}
+                            style={{ width: `0%` }}
                             className="h-full bg-emerald-400 transition-all duration-75"
                           />
                         </div>
@@ -2044,7 +1890,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                 )}
               </button>
 
-              {/* Button 3: Co-Host Sarah Lin */}
+              {/* Button 3: Co-Host */}
               <button
                 onClick={() => handleSwitchCamera("cam_guest_2")}
                 className={`flex-1 min-w-[130px] py-1.5 px-2.5 rounded-lg border flex items-center justify-between text-xs font-semibold cursor-pointer transition-all ${
@@ -2057,7 +1903,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   <span className="w-4 h-4 rounded bg-black/50 text-[9px] font-mono font-bold flex items-center justify-center text-amber-400">
                     3
                   </span>
-                  <span className="truncate">Sarah (Co-Host)</span>
+                  <span className="truncate">Co-host</span>
                 </div>
                 {activeCamera === "cam_guest_2" ? (
                   <span className="text-[8px] font-mono uppercase bg-white text-rose-600 px-1 rounded font-black">
@@ -2198,7 +2044,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Double-Ender Chunks: {chunksRecordedCount} Saved</span>
                 </div>
-                <span className="text-[9px] text-[#8F9CAE]">Host: {hostUploadPct}% • Guest: {guestUploadPct}%</span>
+                <span className="text-[9px] text-[#8F9CAE]">Your upload: {hostUploadPct}% ({chunksUploadedCount}/{chunksRecordedCount})</span>
               </div>
 
               {hostUploadPct < 100 && (
@@ -2226,320 +2072,116 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
       {/* 4. POST-RECORDING PRODUCTION REVIEW: 1-Click to Multitrack Editor & AI Clips */}
       {/* ========================================================================= */}
       {currentStep === "post_recording" && (
-        <div className="flex-1 p-6 max-w-5xl mx-auto w-full space-y-6">
-          {/* Header Summary Banner */}
-          <div className="bg-gradient-to-r from-[#111624] via-[#141B2B] to-[#111624] border border-[#272D3A] rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-            <div className="space-y-1.5">
+        <div className="flex-1 p-6 max-w-4xl mx-auto w-full space-y-4">
+          {/* Summary */}
+          <div className="bg-[#11151E] border border-[#272D3A] rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                <h1 className="text-xl font-black text-white">
-                  Studio Recording Complete • Separate Tracks Synchronized
-                </h1>
+                <h1 className="text-lg font-black text-white">Recording saved</h1>
               </div>
               <p className="text-xs text-[#8F9CAE]">
-                All double-ender chunks have been assembled and preserved. Your session includes independent 4K video and isolated 48kHz audio stems for each participant.
+                {formatSec(recordTimerSec)} recorded • {chunksUploadedCount}/{chunksRecordedCount} chunks uploaded
+                {chunksRecordedCount > chunksUploadedCount ? " • some chunks still need to upload" : ""}
               </p>
             </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                id="btn-podcast-to-editor"
-                onClick={handleSendToEditor}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#168CFF] to-[#16D9F5] text-black font-extrabold text-xs shadow-lg hover:shadow-cyan-500/20 hover:scale-102 transition-all flex items-center gap-2 cursor-pointer"
-              >
-                <Layers className="w-4 h-4" />
-                <span>Open in Multitrack Editor</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Live Switch (Program Mix) Metadata Track Review Card */}
-          <div className="bg-[#11151E] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-32 bg-gradient-to-l from-rose-500/10 to-transparent pointer-events-none" />
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400">
-                  <Radio className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-extrabold text-white">
-                      Track 1: Live Switch (Program Mix) Metadata Track
-                    </h3>
-                    <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/50 text-[10px] font-mono font-bold">
-                      {liveSwitchEvents.length} Live Cuts Synchronized
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[#8F9CAE]">
-                    Real-time camera switches captured live during recording, ready to load into the multitrack editor timeline.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              {chunksRecordedCount > chunksUploadedCount && (
                 <button
-                  onClick={() => {
-                    const edlJson = JSON.stringify(
-                      {
-                        sessionTitle: activeSession?.title,
-                        recordedAt: new Date().toISOString(),
-                        durationSec: activeSession?.recordingDurationSec || recordTimerSec,
-                        cutsCount: liveSwitchEvents.length,
-                        cuts: liveSwitchEvents,
-                      },
-                      null,
-                      2
-                    );
-                    const blob = new Blob([edlJson], { type: "application/json" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${activeSession?.title || "Podcast"}_live_switch_edl.json`;
-                    a.click();
-                    showToast("Downloaded Live Switch EDL metadata (.json)!");
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-[#171C27] hover:bg-[#222A3B] border border-[#272D3A] text-xs font-semibold text-gray-300 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
-                  title="Export raw Edit Decision List metadata"
+                  onClick={handleResumeUploads}
+                  disabled={isUploadResuming}
+                  className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-bold cursor-pointer disabled:opacity-50"
                 >
-                  <Download className="w-3.5 h-3.5 text-[#16D9F5]" />
-                  <span>Export EDL (.json)</span>
+                  {isUploadResuming ? "Uploading..." : "Retry upload"}
                 </button>
-
+              )}
+              {localRecordingUrl && (
+                <a
+                  href={localRecordingUrl}
+                  download={`${(activeSession?.title || "Podcast").replace(/[^\w-]+/g, "_")}_${userRole}.webm`}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#168CFF] to-[#16D9F5] text-black font-extrabold text-xs flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download recording</span>
+                </a>
+              )}
+              {finalizedProject && (
                 <button
+                  id="btn-podcast-to-editor"
                   onClick={handleSendToEditor}
-                  className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-extrabold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all hover:scale-102"
+                  className="px-4 py-2 rounded-xl bg-[#171C27] border border-[#272D3A] text-white font-bold text-xs flex items-center gap-2 cursor-pointer"
                 >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>Edit in Timeline →</span>
+                  <Layers className="w-4 h-4" />
+                  <span>Open in Editor</span>
                 </button>
-              </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+            {/* Your own recorded track (real, from this browser) */}
+            <div className="md:col-span-7 aspect-video bg-black rounded-xl overflow-hidden border border-[#272D3A] relative flex items-center justify-center">
+              {localRecordingUrl ? (
+                <video src={localRecordingUrl} controls className="w-full h-full object-contain" />
+              ) : (
+                <div className="text-center p-6">
+                  <VideoOff className="w-7 h-7 text-[#3A4256] mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-gray-300">No recording on this device</p>
+                  <p className="text-xs text-[#6B7385] mt-1">Allow camera and mic access, then record again.</p>
+                </div>
+              )}
             </div>
 
-            {/* Program Preview & Visual EDL Cut Table */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 pt-1">
-              {/* Program Mix Video Preview */}
-              <div className="md:col-span-6 aspect-video bg-black rounded-xl overflow-hidden border border-[#272D3A] relative group">
-                <video
-                  src={
-                    activeCamera === "cam_guest"
-                      ? ""
-                      : "/storage/uploads/sample_test.mp4"
-                  }
-                  controls
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/80 backdrop-blur-md text-white font-mono text-[9px] font-bold border border-white/20">
-                  PROGRAM MASTER CUT
-                </div>
+            {/* Logged camera cuts */}
+            <div className="md:col-span-5 bg-[#0E121B] rounded-xl border border-[#272D3A] p-3 flex flex-col max-h-[300px]">
+              <div className="flex items-center justify-between text-[10px] font-mono text-[#8F9CAE] pb-2 border-b border-[#1C222E]">
+                <span className="font-bold uppercase text-white">Camera cuts</span>
+                {liveSwitchEvents.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const edlJson = JSON.stringify(
+                        {
+                          sessionTitle: activeSession?.title,
+                          recordedAt: new Date().toISOString(),
+                          durationSec: activeSession?.recordingDurationSec || recordTimerSec,
+                          cutsCount: liveSwitchEvents.length,
+                          cuts: liveSwitchEvents,
+                        },
+                        null,
+                        2
+                      );
+                      const blob = new Blob([edlJson], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${activeSession?.title || "Podcast"}_cuts.json`;
+                      a.click();
+                    }}
+                    className="text-[#16D9F5] hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Download the cut list (.json)"
+                  >
+                    <Download className="w-3 h-3" /> Export
+                  </button>
+                )}
               </div>
-
-              {/* Recorded Cuts Timeline Table */}
-              <div className="md:col-span-6 bg-[#0E121B] rounded-xl border border-[#272D3A] p-3 flex flex-col justify-between max-h-[220px]">
-                <div className="flex items-center justify-between text-[10px] font-mono text-[#8F9CAE] pb-2 border-b border-[#1C222E]">
-                  <span className="font-bold uppercase text-white">Logged Switch Cuts</span>
-                  <span>{liveSwitchEvents.length} Recorded</span>
-                </div>
-                <div className="space-y-1.5 overflow-y-auto pr-1 flex-1 py-1.5 text-xs font-mono">
-                  {(liveSwitchEvents.length > 0 ? liveSwitchEvents : [
-                    { id: "sw_1", timestamp: 0, camera: "cam_host" as CameraSourceId, label: `Cam 1: ${participantName}`, speakerName: participantName, transition: "cut" as const },
-                    { id: "sw_2", timestamp: 5.5, camera: "cam_guest" as CameraSourceId, label: `Cam 2: ${guestJoinName}`, speakerName: guestJoinName, transition: "cut" as const },
-                    { id: "sw_3", timestamp: 12.0, camera: "cam_host" as CameraSourceId, label: `Cam 1: ${participantName}`, speakerName: participantName, transition: "cut" as const },
-                  ]).map((cut, idx) => (
-                    <div
-                      key={cut.id || idx}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-[#141A26] border border-[#222B3D] text-[11px]"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 font-bold text-[9px] flex items-center justify-center flex-shrink-0">
-                          {idx + 1}
-                        </span>
-                        <span className="text-white font-semibold truncate">{cut.label}</span>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
-                        <span className="text-[#16D9F5] font-bold">{formatSec(Math.round(cut.timestamp))}</span>
-                        <span className="px-1.5 py-0.2 rounded bg-black/60 text-gray-400 border border-white/10 uppercase text-[9px]">
-                          {cut.transition.toUpperCase()}
-                        </span>
-                      </div>
+              <div className="space-y-1.5 overflow-y-auto pr-1 flex-1 py-1.5 text-xs font-mono">
+                {liveSwitchEvents.length === 0 ? (
+                  <p className="text-[11px] text-[#6B7385] py-4 text-center">No camera cuts logged</p>
+                ) : (
+                  liveSwitchEvents.map((cut, idx) => (
+                    <div key={cut.id || idx} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-[#141A26] border border-[#222B3D] text-[11px]">
+                      <span className="text-white font-semibold truncate">{idx + 1}. {cut.label}</span>
+                      <span className="text-[#16D9F5] font-bold flex-shrink-0">{formatSec(Math.round(cut.timestamp))}</span>
                     </div>
-                  ))}
-                </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
 
-          {/* Synchronized Participant Tracks Review Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Host Track Card */}
-            <div className="bg-[#11151E] border border-[#272D3A] rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-white flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#16D9F5]" />
-                  <span>{participantName} (Host Isolated Track)</span>
-                </span>
-                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
-                  100% Uploaded (84.2 MB)
-                </span>
-              </div>
-              <div className="aspect-video bg-black rounded-lg overflow-hidden relative">
-                <video
-                  src="/storage/uploads/sample_test.mp4"
-                  controls
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-[#8F9CAE]">
-                <span>Track 1: Video (Host 4K Cam)</span>
-                <span className="font-mono text-cyan-400">Track 3: Audio Stem (48kHz WAV)</span>
-              </div>
-            </div>
-
-            {/* Guest Track Card */}
-            <div className="bg-[#11151E] border border-[#272D3A] rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-white flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-400" />
-                  <span>{guestJoinName} (Guest Isolated Track)</span>
-                </span>
-                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
-                  100% Uploaded (79.6 MB)
-                </span>
-              </div>
-              <div className="aspect-video bg-black rounded-lg overflow-hidden relative">
-                <video
-                  src=""
-                  controls
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-[#8F9CAE]">
-                <span>Track 2: B-Roll (Guest 4K Cam)</span>
-                <span className="font-mono text-purple-400">Track 4: Audio Stem (48kHz WAV)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* AI Viral Clips Generated from Interview */}
-          <div className="bg-[#11151E] border border-[#272D3A] rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#16D9F5]" />
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  AI Viral Clips Detected from this Interview
-                </h3>
-              </div>
-              <span className="text-[10px] text-[#8F9CAE]">Hook scored out of 10</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {(activeSession?.aiClips || [
-                {
-                  id: "clip_1",
-                  title: "Why Double-Ender Recording Beats Zoom Audio",
-                  scores: { overall: 9.4, hookStrength: 9.6 },
-                  tags: ["Double-Ender", "Audio Quality"],
-                  hook: "Recording uncompressed audio locally eliminates all internet glitch dropouts.",
-                },
-                {
-                  id: "clip_2",
-                  title: "Automated Multitrack Sync & Zero Audio Drift",
-                  scores: { overall: 9.0, hookStrength: 9.2 },
-                  tags: ["Multitrack", "VEGAS Pro Editor"],
-                  hook: "The multitrack timeline editor synchronizes both isolated tracks automatically.",
-                },
-              ]).map((clip: any) => (
-                <div
-                  key={clip.id}
-                  className="bg-[#171C27] border border-[#272D3A] hover:border-[#16D9F5]/40 rounded-xl p-3.5 space-y-2.5 transition-all"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-white text-xs truncate max-w-[260px]">{clip.title}</span>
-                    <span className="px-1.5 py-0.5 rounded font-mono font-bold text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                      {clip.scores?.overall || 9.2} Score
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-gray-300 italic line-clamp-2">"{clip.hook}"</p>
-                  <div className="flex items-center justify-between pt-1">
-                    <div className="flex items-center gap-1">
-                      {clip.tags?.slice(0, 2).map((t: string) => (
-                        <span key={t} className="text-[9px] font-mono text-[#8F9CAE] bg-[#11151E] px-1.5 py-0.5 rounded">
-                          #{t}
-                        </span>
-                      ))}
-                    </div>
-                    <button
-                      onClick={() => onNavigateToAIClips?.(clip as any)}
-                      className="text-[10px] font-bold text-[#16D9F5] hover:text-white flex items-center gap-1 cursor-pointer"
-                    >
-                      <span>Send to AI Clips</span>
-                      <ArrowRight className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Transcript & Export Actions */}
-          <div className="bg-[#11151E] border border-[#272D3A] rounded-2xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-white flex items-center gap-2">
-                <FileText className="w-4 h-4 text-[#16D9F5]" />
-                Speaker-Differentiated Transcript
-              </span>
-              <button
-                onClick={() => {
-                  const txt = (activeSession?.transcript || [])
-                    .map((t) => `[${t.speakerName}]: ${t.text}`)
-                    .join("\n\n");
-                  const blob = new Blob([txt], { type: "text/plain" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${activeSession?.title || "Podcast"}_transcript.txt`;
-                  a.click();
-                  showToast("Transcript downloaded (.txt)!");
-                }}
-                className="text-[10px] text-[#16D9F5] hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <Download className="w-3 h-3" /> Download Transcript (.txt)
-              </button>
-            </div>
-
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {(activeSession?.transcript && activeSession.transcript.length > 0
-                ? activeSession.transcript
-                : [
-                    {
-                      id: "1",
-                      speakerName: participantName,
-                      startTime: 0.5,
-                      text: "Welcome back to the studio. Today we're joined by John Knox to unpack double-ender recording.",
-                    },
-                    {
-                      id: "2",
-                      speakerName: guestJoinName,
-                      startTime: 5.5,
-                      text: "Thanks for having me! Recording uncompressed audio and 4K camera locally eliminates all live internet packet dropouts.",
-                    },
-                    {
-                      id: "3",
-                      speakerName: participantName,
-                      startTime: 12.2,
-                      text: "Exactly. The multitrack timeline editor synchronizes both isolated tracks automatically so you get zero drift.",
-                    },
-                  ]
-              ).map((t: any) => (
-                <div key={t.id} className="bg-[#171C27] rounded-lg p-2.5 text-xs space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-mono">
-                    <span className="font-bold text-[#16D9F5]">{t.speakerName}</span>
-                    <span className="text-[#8F9CAE]">{t.startTime}s</span>
-                  </div>
-                  <p className="text-gray-200">{t.text}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+          <p className="text-[11px] text-[#6B7385]">
+            Your chunks are saved to this session on the server. Combining everyone's tracks into a multitrack edit, plus transcripts and AI clips for podcasts, isn't available yet.
+          </p>
         </div>
       )}
 
@@ -2569,7 +2211,7 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
                   type="email"
                   value={recipientEmail}
                   onChange={(e) => setRecipientEmail(e.target.value)}
-                  placeholder="e.g. john.knox@interviewguest.com"
+                  placeholder="guest@email.com"
                   className="w-full bg-[#171C27] border border-[#272D3A] rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-[#16D9F5]"
                 />
               </div>
@@ -2577,10 +2219,10 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
               <div className="p-3 bg-[#11151E] rounded-lg border border-[#252B38] space-y-1.5 text-[11px] text-gray-300">
                 <span className="font-semibold text-white block">Email Preview:</span>
                 <p>
-                  "You've been invited to record a double-ender interview session with {participantName} on ClipFlow. Join directly in Chrome without creating an account."
+                  "You're invited to record "{activeSession?.title}" with {participantName} on ClipFlow. Join in your browser, no account needed."
                 </p>
                 <span className="text-[#16D9F5] font-mono text-[10px] break-all block">
-                  Link: {activeSession?.inviteUrl || window.location.href}
+                  Link: {activeSession ? `${window.location.origin}/?podcastSession=${activeSession.id}` : ""}
                 </span>
               </div>
             </div>
@@ -2594,10 +2236,10 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
               </button>
               <button
                 onClick={handleSendEmailInvite}
-                disabled={emailSendingStatus === "sending"}
+                disabled={!recipientEmail.trim()}
                 className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-[#168CFF] to-[#16D9F5] text-black font-extrabold text-xs shadow cursor-pointer disabled:opacity-50"
               >
-                {emailSendingStatus === "sending" ? "Sending..." : "Dispatch Email Invite"}
+                Open in my email app
               </button>
             </div>
           </div>
@@ -2727,30 +2369,22 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
               <div className="p-3 bg-[#11151E] rounded-xl border border-[#252B38] flex items-start gap-3">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold text-white block">Chunk Storage & File Management</span>
-                  <span className="text-[#8F9CAE] text-[11px]">
-                    Active: Local Node.js filesystem `/storage/podcasts` + atomic chunk recovery. Ready for high-volume S3 / Cloudflare R2 bucket hookup.
-                  </span>
+                  <span className="font-bold text-white block">Chunk uploads</span>
+                  <span className="text-[#8F9CAE] text-[11px]">Working: each person's recording uploads in 3-second chunks to this session's folder.</span>
                 </div>
               </div>
-
               <div className="p-3 bg-[#11151E] rounded-xl border border-[#252B38] flex items-start gap-3">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold text-white block">Low-Latency Conversation Signaling</span>
-                  <span className="text-[#8F9CAE] text-[11px]">
-                    Active: P2P BroadcastChannel and WebRTC DataChannel. For multi-region enterprise firewalls, provide standard STUN/TURN server URLs.
-                  </span>
+                  <span className="font-bold text-white block">Live video between host and guest</span>
+                  <span className="text-[#8F9CAE] text-[11px]">Not yet: needs a WebRTC/TURN service so you can see each other across different devices.</span>
                 </div>
               </div>
-
               <div className="p-3 bg-[#11151E] rounded-xl border border-[#252B38] flex items-start gap-3">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold text-white block">Multitrack Audio Alignment</span>
-                  <span className="text-[#8F9CAE] text-[11px]">
-                    Active: Synchronized clapperboard timestamp alignment and sample-accurate audio track handoff into VEGAS Pro timeline.
-                  </span>
+                  <span className="font-bold text-white block">Multitrack export, transcript and AI clips</span>
+                  <span className="text-[#8F9CAE] text-[11px]">Not yet: recordings can be downloaded, but combining tracks into the editor isn't built.</span>
                 </div>
               </div>
             </div>

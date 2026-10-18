@@ -16,6 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { AdTestExperiment, AdTestCombination } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 interface AdTestBuilderProps {
   onBackToHub: () => void;
@@ -64,7 +65,7 @@ export const AdTestBuilder: React.FC<AdTestBuilderProps> = ({ onBackToHub }) => 
           ctaId: `c_${cIdx}`,
           ctaText: c,
           videoUrl: "",
-          thumbnailUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80",
+          thumbnailUrl: MEDIA_PLACEHOLDER,
           status: "ready",
           estimatedCtr: `${(3.2 + (hIdx * 0.4) + (cIdx * 0.3)).toFixed(1)}%`,
           predictedRoas: Number((2.8 + (hIdx * 0.3) + (bIdx * 0.2)).toFixed(2)),

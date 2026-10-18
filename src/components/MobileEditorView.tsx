@@ -1143,27 +1143,6 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
               </div>
             </button>
 
-            {/* 4. Quick Sample Clip */}
-            <button
-              onClick={() => {
-                const sampleAsset: MediaItem = {
-                  id: `media_sample_${Date.now()}`,
-                  name: "Cinematic_B_Roll.mp4",
-                  type: "video",
-                  size: "12.4 MB",
-                  duration: 5,
-                  url: "",
-                };
-                handleAddFromLibrary(sampleAsset);
-              }}
-              className="p-2.5 rounded-xl bg-[#171E2D] hover:bg-[#202738] border border-[#272D3A] text-left text-white flex items-center gap-2 active:scale-95 transition-all"
-            >
-              <Film className="w-4 h-4 text-pink-400 flex-shrink-0" />
-              <div>
-                <span className="font-semibold block text-[11px]">Sample B-Roll</span>
-                <span className="text-[9px] text-gray-400">Cinematic footage</span>
-              </div>
-            </button>
           </div>
 
           {/* Media Library assets if available */}

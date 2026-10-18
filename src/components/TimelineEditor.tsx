@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { MEDIA_PLACEHOLDER } from "../utils/placeholders";
 import {
   Play,
   Pause,
@@ -745,18 +746,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   }, []);
 
   // Source Monitor Media & Playback State
-  const [sourceMedia, setSourceMedia] = useState<SourceMediaItem | null>({
-    id: "raw_a_01",
-    name: "THE 60-DAY CREATOR TRAP - Master Hook.mp4",
-    title: "THE 60-DAY CREATOR TRAP - Master Hook.mp4",
-    duration: "00:42",
-    durationSec: 42,
-    type: "video",
-    resolution: "4K UHD · 60fps",
-    url: "",
-    thumbnail: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80",
-    folderPath: "01_RAW FOOTAGE/A_Camera",
-  });
+  const [sourceMedia, setSourceMedia] = useState<SourceMediaItem | null>(null);
   const [sourcePlayhead, setSourcePlayhead] = useState<number>(0);
   const [sourceIsPlaying, setSourceIsPlaying] = useState<boolean>(false);
   const [sourceInPoint, setSourceInPoint] = useState<number | null>(null);
@@ -1271,56 +1261,10 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [soundLibrary, setSoundLibrary] = useState<SoundLibraryItem[]>(() => {
     try {
       const saved = localStorage.getItem("clipflow_reusable_sounds");
-      if (saved) return JSON.parse(saved);
+      // Keep the user's own sounds; drop the placeholder tracks older versions pre-filled.
+      if (saved) return (JSON.parse(saved) || []).filter((x: any) => !/actions\.google\.com\/sounds/.test(String(x?.url || "")));
     } catch (e) {}
-    return [
-      {
-        id: "snd_future_bass",
-        name: "Future Bass Beat (Main Hook).mp3",
-        url: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-        duration: 30,
-        category: "music",
-        folderId: "soundtracks",
-        isFavorite: true,
-        fileSize: "2.4 MB",
-        bpm: 128,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: "snd_lofi_chill",
-        name: "Lo-Fi Deep Ambient Tape.mp3",
-        url: "https://actions.google.com/sounds/v1/weather/rain_heavy.ogg",
-        duration: 25,
-        category: "ambient",
-        folderId: "soundtracks",
-        isFavorite: true,
-        fileSize: "1.8 MB",
-        bpm: 85,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: "snd_cinematic_riser",
-        name: "Cinematic Tension Riser.wav",
-        url: "https://actions.google.com/sounds/v1/impacts/crash_metal.ogg",
-        duration: 6,
-        category: "sfx",
-        folderId: "sfx",
-        isFavorite: false,
-        fileSize: "480 KB",
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: "snd_whoosh_transition",
-        name: "Cyber Whoosh Impact.mp3",
-        url: "https://actions.google.com/sounds/v1/foley/paper_slide.ogg",
-        duration: 3,
-        category: "sfx",
-        folderId: "sfx",
-        isFavorite: false,
-        fileSize: "220 KB",
-        createdAt: new Date().toISOString(),
-      },
-    ];
+    return [];
   });
   const [soundFolders, setSoundFolders] = useState<SoundFolder[]>([
     { id: "all", name: "All Sounds", isDefault: true },
@@ -1563,45 +1507,23 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [soundSearchQuery, setSoundSearchQuery] = useState<string>("");
 
   // Project Assets Library (uploads + B-roll + images)
-  const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([
-    {
-      id: "asset_01",
-      title: activeProject?.name ? `${activeProject.name.slice(0, 18)}.mp4` : "Untitled.mp4",
-      duration: "18s",
-      durationSec: 18,
-      type: "video",
-      img: activeProject?.sourceThumbnail || "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: activeProject?.sourceVideoUrl || "",
-    },
-    {
-      id: "asset_02",
-      title: "Tech_B_Roll.mp4",
-      duration: "12s",
-      durationSec: 12,
-      type: "broll",
-      img: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: "",
-    },
-    {
-      id: "asset_03",
-      title: "Office_Night_Vlog.mp4",
-      duration: "8s",
-      durationSec: 8,
-      type: "video",
-      img: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=300&q=80",
-      sourceUrl: "",
-    },
-    {
-      id: "asset_04",
-      title: "ClipFlow_Watermark.png",
-      duration: "Img",
-      durationSec: 6,
-      type: "image",
-      img: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=300&q=80",
-    },
-  ]);
+  const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>(() =>
+    activeProject?.sourceVideoUrl
+      ? [
+          {
+            id: "asset_01",
+            title: activeProject?.name ? `${activeProject.name.slice(0, 18)}.mp4` : "Untitled.mp4",
+            duration: activeProject?.duration ? `${Math.round(activeProject.duration)}s` : "",
+            durationSec: activeProject?.duration || 0,
+            type: "video",
+            img: activeProject?.sourceThumbnail || MEDIA_PLACEHOLDER,
+            sourceUrl: activeProject.sourceVideoUrl,
+          },
+        ]
+      : []
+  );
 
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>("asset_01");
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(activeProject?.sourceVideoUrl ? "asset_01" : null);
 
   // ----------------------------------------------------
   // WORKSPACE LAYOUT & DOCKING PERSISTENCE STATE
@@ -2904,7 +2826,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         duration: `${Math.round(m.duration || 15)}s`,
         durationSec: Math.round(m.duration || 15),
         type: (m.mimeType?.startsWith("image/") ? "image" : m.mimeType?.startsWith("audio/") ? "music" : "video") as TrackType,
-        img: m.thumbnailUrl || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80",
+        img: m.thumbnailUrl || MEDIA_PLACEHOLDER,
         sourceUrl: m.url || m.signedUrl,
       }));
       setProjectAssets((prev) => {
@@ -4871,7 +4793,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             duration: m.duration ? `${m.duration}s` : (m.type === "image" ? "Img" : "30s"),
             durationSec: m.duration || (m.type === "image" ? 5 : 30),
             type: m.type === "audio" ? "music" : m.type === "image" ? "image" : "video",
-            img: m.thumbnail || (m.type === "image" ? m.url : "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80"),
+            img: m.thumbnail || (m.type === "image" ? m.url : MEDIA_PLACEHOLDER),
             sourceUrl: m.url,
           }));
         if (newFromMedia.length > 0) {
@@ -4975,7 +4897,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         type: isVid ? "video" : isAud ? "music" : "image",
         img: isImg
           ? realUrl
-          : (detectedThumb || "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=300&q=80"),
+          : (detectedThumb || MEDIA_PLACEHOLDER),
         sourceUrl: realUrl,
       };
 
@@ -5454,21 +5376,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     };
     e.dataTransfer.setData("application/json", JSON.stringify(assetPayload));
     e.dataTransfer.setData("text/plain", titleText);
-    e.dataTransfer.effectAllowed = "copy";
-  };
-
-  // Drag start handler for audio presets
-  const handleAudioDragStart = (e: React.DragEvent, snd: { name: string; type: string; dur: string }) => {
-    setIsDraggingAsset(true);
-    const assetPayload = {
-      id: `asset_audio_${Date.now()}`,
-      title: snd.name,
-      type: "music" as TrackType,
-      durationSec: 12.0,
-      sourceUrl: "https://actions.google.com/sounds/v1/science_fiction/alien_hum.ogg",
-    };
-    e.dataTransfer.setData("application/json", JSON.stringify(assetPayload));
-    e.dataTransfer.setData("text/plain", snd.name);
     e.dataTransfer.effectAllowed = "copy";
   };
 
@@ -6125,27 +6032,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                           <div className="h-px bg-[#272D3A] my-1" />
                           <button
                             onClick={() => {
-                              const newBroll: ProjectAsset = {
-                                id: `broll_${Date.now()}`,
-                                title: "Cinematic_City_Sunset.mp4",
-                                duration: "10s",
-                                durationSec: 10,
-                                type: "broll",
-                                img: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=300&q=80",
-                                sourceUrl: "",
-                              };
-                              setProjectAssets((prev) => [newBroll, ...prev]);
-                              handleInsertAssetToTimeline(newBroll);
-                              setIsAddMenuOpen(false);
-                              showToast("Added Sunset B-Roll to project and timeline");
-                            }}
-                            className="w-full px-3 py-1.5 text-left hover:bg-[#202738] flex items-center gap-2 cursor-pointer"
-                          >
-                            <Film className="w-3.5 h-3.5 text-pink-400" />
-                            <span>Add Sample B-Roll</span>
-                          </button>
-                          <button
-                            onClick={() => {
                               handleInsertTextPreset("NEW HOOK HEADLINE");
                               setIsAddMenuOpen(false);
                             }}
@@ -6748,6 +6634,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
                 {/* Sounds List */}
                 <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {soundLibrary.length === 0 && (
+                    <p className="text-[11px] text-[#6B7385] text-center py-4">No sounds yet. Import audio to save it here.</p>
+                  )}
                   {soundLibrary
                     .filter((snd) => {
                       if (activeSoundFolder === "favorites") return snd.isFavorite;
@@ -8053,22 +7942,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Retry Playback</span>
                       </button>
-                      <button
-                        onClick={() => {
-                          // Fallback to sample playable clip if demo media is corrupted
-                          console.info("[TimelineEditor] Switching to verified local video asset fallback");
-                          setPreviewMediaError(null);
-                          if (videoRef.current) {
-                            videoRef.current.src = "";
-                            videoRef.current.load();
-                            videoRef.current.play().catch(() => {});
-                          }
-                          showToast("Loaded verified local preview asset");
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-[#202736] hover:bg-[#2A3448] text-gray-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-white/10"
-                      >
-                        <span>Use Local Fallback</span>
-                      </button>
                     </div>
                   </div>
                 )}
@@ -8364,7 +8237,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         WebkitBackgroundClip: "text",
                         backgroundClip: "text",
                         color: "transparent",
-                        backgroundImage: `url(${activeVideoClip?.sourceThumbnail || 'https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=600&q=80'})`,
+                        backgroundImage: `url(${activeVideoClip?.sourceThumbnail || MEDIA_PLACEHOLDER})`,
                         backgroundSize: "cover",
                         fontSize,
                         fontWeight,
@@ -9777,7 +9650,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         handleReplaceAudioMix(flStudioMixBanner.url, flStudioMixBanner.fileName);
                         setFlStudioMixBanner(null);
                       } else {
-                        handleReplaceAudioMix("https://example.com/fl-mix.wav", "FL_Mix_Master.wav");
+                        showToast("No FL Studio mix received yet. Export one from the DAW Bridge first.");
                       }
                       setActiveTimelineMenu(null);
                     }}
@@ -9794,7 +9667,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         handleAddMixAsNewTrack(flStudioMixBanner.url, flStudioMixBanner.fileName);
                         setFlStudioMixBanner(null);
                       } else {
-                        handleAddMixAsNewTrack("https://example.com/fl-mix.wav", "FL_Mix_Master.wav");
+                        showToast("No FL Studio mix received yet. Export one from the DAW Bridge first.");
                       }
                       setActiveTimelineMenu(null);
                     }}
@@ -11943,7 +11816,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_guest", "Cam 2: John Knox", "")}
+                  onClick={() => handleSwitchCutAngle("cam_guest", "Cam 2: Guest", "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
@@ -11951,11 +11824,11 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSwitchCutAngle("cam_guest_2", "Cam 3: Sarah Lin", "")}
+                  onClick={() => handleSwitchCutAngle("cam_guest_2", "Cam 3: Co-host", "")}
                   className="px-2 py-1 rounded bg-[#11151E] hover:bg-rose-600/30 hover:border-rose-400 border border-[#272D3A] text-left text-[10.5px] text-gray-200 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  <span className="truncate">Cam 3: Sarah</span>
+                  <span className="truncate">Cam 3: Co-host</span>
                 </button>
                 <button
                   type="button"
@@ -12532,7 +12405,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               <div className="p-2.5 bg-black/40 rounded-lg border border-[#272D3A] space-y-1 font-mono text-[10px] text-[#9CA5B5]">
                 <div className="flex justify-between">
                   <span>Project ID:</span>
-                  <span className="text-gray-300">{activeProject?.id || "demo_proj"}</span>
+                  <span className="text-gray-300">{activeProject?.id || "Unsaved"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Framerate & Canvas:</span>

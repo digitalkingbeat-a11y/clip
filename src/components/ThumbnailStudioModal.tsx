@@ -63,47 +63,13 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
   currentThumbnail,
   onSelectThumbnail,
 }) => {
-  // Preset candidate thumbnails from video keyframes
-  const [candidates, setCandidates] = useState<CandidateThumbnail[]>([
-    {
-      id: "thumb_01",
-      timestamp: 2.4,
-      imageUrl: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=1280&q=80",
-      titleOverlay: "STOP DOING THIS!",
-      showText: true,
-      textStyle: "bold_yellow",
-      filterStyle: "contrast_pop",
-      predictedCtr: 9.4,
-      breakdown: { contrast: 92, readability: 96, facialPresence: 88, hookPower: 95 },
-    },
-    {
-      id: "thumb_02",
-      timestamp: 5.8,
-      imageUrl: "https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&w=1280&q=80",
-      titleOverlay: "THE 10X SECRET",
-      showText: true,
-      textStyle: "neon_cyan",
-      filterStyle: "neon_border",
-      predictedCtr: 8.8,
-      breakdown: { contrast: 85, readability: 90, facialPresence: 82, hookPower: 89 },
-    },
-    {
-      id: "thumb_03",
-      timestamp: 11.2,
-      imageUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1280&q=80",
-      titleOverlay: "DON'T MISS THIS",
-      showText: true,
-      textStyle: "impact_red",
-      filterStyle: "vibrant",
-      predictedCtr: 9.1,
-      breakdown: { contrast: 89, readability: 92, facialPresence: 94, hookPower: 91 },
-    },
-  ]);
+  // Thumbnail candidates come only from frames the user captures from their own video.
+  const [candidates, setCandidates] = useState<CandidateThumbnail[]>([]);
 
-  const [selectedIds, setSelectedIds] = useState<string[]>(["thumb_01", "thumb_02"]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [comparisonMode, setComparisonMode] = useState<"matrix" | "youtube" | "tiktok_reels">("matrix");
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
-  const [activeEditingId, setActiveEditingId] = useState<string>("thumb_01");
+  const [activeEditingId, setActiveEditingId] = useState<string>("");
 
   useEffect(() => {
     if (candidates.length >= 2 && selectedIds.length === 0) {
@@ -132,26 +98,20 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
 
       if (!capturedUrl) {
         // Fallback to high-res video scene snapshot
-        capturedUrl =
-          currentVideoSrc ||
-          "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=1280&q=80";
+        capturedUrl = currentThumbnail || "";
       }
 
       const newCandidate: CandidateThumbnail = {
         id: `thumb_snap_${Date.now()}`,
         timestamp: Number(playheadTime.toFixed(1)),
         imageUrl: capturedUrl,
-        titleOverlay: "NEW REVELATION",
+        titleOverlay: "YOUR TITLE",
         showText: true,
         textStyle: "bold_yellow",
         filterStyle: "contrast_pop",
-        predictedCtr: Number((8.5 + Math.random() * 1.2).toFixed(1)),
-        breakdown: {
-          contrast: Math.floor(82 + Math.random() * 15),
-          readability: Math.floor(85 + Math.random() * 12),
-          facialPresence: Math.floor(78 + Math.random() * 20),
-          hookPower: Math.floor(85 + Math.random() * 14),
-        },
+        // No CTR prediction model is connected, so no scores are shown.
+        predictedCtr: 0,
+        breakdown: { contrast: 0, readability: 0, facialPresence: 0, hookPower: 0 },
       };
 
       setCandidates((prev) => [newCandidate, ...prev]);
@@ -297,6 +257,12 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
 
         {/* Modal Main Body: Side-by-Side Comparison Area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {candidates.length === 0 && (
+            <div className="border border-dashed border-[#272D3A] rounded-xl p-8 text-center">
+              <p className="text-sm font-semibold text-gray-300">No thumbnails yet</p>
+              <p className="text-xs text-[#6B7385] mt-1">Pause your video on a good frame, then capture it to start comparing.</p>
+            </div>
+          )}
           {/* Side-by-Side View */}
           {comparisonMode === "matrix" && (
             <div className={`grid gap-4 ${selectedIds.length === 1 ? "grid-cols-1 max-w-xl mx-auto" : selectedIds.length === 2 ? "grid-cols-1 sm:grid-cols-2" : selectedIds.length === 3 ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"}`}>
@@ -319,10 +285,6 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
                         <span className="font-bold text-white text-xs truncate max-w-[120px]">
                           Frame @ {candidate.timestamp}s
                         </span>
-                      </div>
-                      <div className="flex items-center gap-1 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full text-emerald-400 font-mono font-bold text-[10px]">
-                        <Zap className="w-3 h-3 text-emerald-400" />
-                        <span>CTR {candidate.predictedCtr}/10</span>
                       </div>
                     </div>
 
@@ -365,39 +327,6 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
                           </span>
                         </div>
                       )}
-                    </div>
-
-                    {/* A/B Score Breakdown Meters */}
-                    <div className="p-3 space-y-2 text-[10px]">
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-gray-400">
-                          <span>Visual Contrast</span>
-                          <span className="font-mono text-white">{candidate.breakdown.contrast}%</span>
-                        </div>
-                        <div className="w-full bg-[#11151E] h-1.5 rounded-full overflow-hidden">
-                          <div className="bg-[#168CFF] h-full" style={{ width: `${candidate.breakdown.contrast}%` }} />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-gray-400">
-                          <span>Title Readability</span>
-                          <span className="font-mono text-white">{candidate.breakdown.readability}%</span>
-                        </div>
-                        <div className="w-full bg-[#11151E] h-1.5 rounded-full overflow-hidden">
-                          <div className="bg-[#16D9F5] h-full" style={{ width: `${candidate.breakdown.readability}%` }} />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-gray-400">
-                          <span>Hook & Click Power</span>
-                          <span className="font-mono text-white">{candidate.breakdown.hookPower}%</span>
-                        </div>
-                        <div className="w-full bg-[#11151E] h-1.5 rounded-full overflow-hidden">
-                          <div className="bg-emerald-400 h-full" style={{ width: `${candidate.breakdown.hookPower}%` }} />
-                        </div>
-                      </div>
                     </div>
 
                     {/* Card Actions */}
@@ -448,7 +377,6 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
                     >
                       <div className="flex items-center justify-between text-xs text-gray-400 border-b border-gray-800 pb-1.5">
                         <span className="font-bold text-white">Variation {String.fromCharCode(65 + index)}</span>
-                        <span className="text-emerald-400 font-mono">CTR {candidate.predictedCtr}/10</span>
                       </div>
 
                       {/* YouTube Card */}
@@ -522,9 +450,6 @@ export const ThumbnailStudioModal: React.FC<ThumbnailStudioModalProps> = ({
                       {/* Header */}
                       <div className="relative z-10 flex items-center justify-between text-white text-xs font-bold">
                         <span>Option {String.fromCharCode(65 + index)}</span>
-                        <span className="text-[10px] bg-black/60 px-2 py-0.5 rounded-full text-emerald-400 font-mono">
-                          CTR {candidate.predictedCtr}
-                        </span>
                       </div>
 
                       {/* Central Hook */}

@@ -21,6 +21,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Project, TimelineTrack, TimelineItem, AspectRatio } from "../../types";
+import { MEDIA_PLACEHOLDER } from "../../utils/placeholders";
 
 interface AiUgcAdsWorkflowProps {
   onBackToHub: () => void;
@@ -56,7 +57,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "4.7%",
       suggestedPacing: "Fast cuts (0.8s - 1.5s)",
       sampleHook: "I was honestly ready to delete TikTok until I tested this one tool.",
-      bgImage: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
     {
       id: "demonstration",
@@ -65,7 +66,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "4.3%",
       suggestedPacing: "Action-oriented split screen",
       sampleHook: "Watch me edit a full 60-minute podcast into 15 viral shorts in 45 seconds.",
-      bgImage: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
     {
       id: "problem_solution",
@@ -74,7 +75,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "4.1%",
       suggestedPacing: "Emotional contrast wipe",
       sampleHook: "If you spend more than 2 hours editing video every week, stop scrolling.",
-      bgImage: "https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
     {
       id: "unboxing",
@@ -83,7 +84,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "3.9%",
       suggestedPacing: "Close-up macro shots + ASMR",
       sampleHook: "TikTok made me buy this, but does it actually work?",
-      bgImage: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
     {
       id: "talking_head",
@@ -92,7 +93,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "4.0%",
       suggestedPacing: "Steady eye contact with jump cuts",
       sampleHook: "Here is the exact retention editing trick top YouTubers use in 2026.",
-      bgImage: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
     {
       id: "spokesperson",
@@ -101,7 +102,7 @@ export const AiUgcAdsWorkflow: React.FC<AiUgcAdsWorkflowProps> = ({
       conversionRate: "3.8%",
       suggestedPacing: "Dynamic zoom punches every 2s",
       sampleHook: "Stop paying freelancers $500 per video when you can do this.",
-      bgImage: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=600&q=80",
+      bgImage: MEDIA_PLACEHOLDER,
     },
   ];
 

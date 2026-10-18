@@ -51,6 +51,7 @@ import {
   LiveStreamSession,
   Project,
 } from "../types";
+import { STANDBY_BACKGROUND } from "../utils/placeholders";
 
 interface LiveStudioViewProps {
   projects?: Project[];
@@ -216,7 +217,7 @@ const INITIAL_SCENES: LiveStudioScene[] = [
         id: "src_bg_standby",
         name: "Background Image",
         type: "image",
-        mediaUrl: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1920&q=80",
+        mediaUrl: STANDBY_BACKGROUND,
         visible: true,
         locked: true,
         x: 0,

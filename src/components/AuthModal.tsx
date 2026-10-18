@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { User, LogIn, UserPlus, LogOut, Check, X, Shield, Lock, Mail, AlertCircle, Smartphone } from "lucide-react";
 import { UserProfile } from "../types";
+import { AVATAR_PLACEHOLDER } from "../utils/placeholders";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -152,7 +153,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] p-0.5">
                     <img
-                      src={currentUser.avatarUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"}
+                      src={currentUser.avatarUrl || AVATAR_PLACEHOLDER}
                       alt={currentUser.name}
                       className="w-full h-full object-cover rounded-full bg-[#0E121C]"
                     />

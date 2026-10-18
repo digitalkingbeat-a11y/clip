@@ -310,10 +310,9 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
                 type="button"
                 onClick={() => {
                   onUpdateProp("name", "[LIVE CUT] Cam 1: Host");
-                  onUpdateProp("sourceUrl", "/storage/uploads/sample_test.mp4");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
-                  item.name.includes("Cam 1") || item.sourceUrl?.includes("sample_test.mp4")
+                  item.name.includes("Cam 1")
                     ? "bg-rose-600/30 border-rose-400 text-white font-bold shadow-sm"
                     : "bg-[#11151E] border-[#252E40] text-gray-300 hover:text-white hover:border-[#16D9F5]"
                 }`}
@@ -325,24 +324,22 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onUpdateProp("name", "[LIVE CUT] Cam 2: John Knox (Guest)");
-                  onUpdateProp("sourceUrl", "");
+                  onUpdateProp("name", "[LIVE CUT] Cam 2: Guest");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
-                  item.name.includes("Cam 2") || item.sourceUrl?.includes("ForBiggerEscapes.mp4")
+                  item.name.includes("Cam 2")
                     ? "bg-rose-600/30 border-rose-400 text-white font-bold shadow-sm"
                     : "bg-[#11151E] border-[#252E40] text-gray-300 hover:text-white hover:border-[#16D9F5]"
                 }`}
               >
                 <span className="w-2 h-2 rounded-full bg-purple-400" />
-                <span className="truncate">Cam 2: Guest (John)</span>
+                <span className="truncate">Cam 2: Guest</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
-                  onUpdateProp("name", "[LIVE CUT] Cam 3: Sarah Lin (Producer)");
-                  onUpdateProp("sourceUrl", "");
+                  onUpdateProp("name", "[LIVE CUT] Cam 3: Co-host");
                 }}
                 className={`py-1.5 px-2 rounded-lg border text-left text-[11px] font-medium transition-all cursor-pointer flex items-center gap-2 ${
                   item.name.includes("Cam 3") || item.sourceUrl?.includes("TearsOfSteel.mp4")
@@ -351,7 +348,7 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
                 }`}
               >
                 <span className="w-2 h-2 rounded-full bg-amber-400" />
-                <span className="truncate">Cam 3: Co-Host (Sarah)</span>
+                <span className="truncate">Cam 3: Co-host</span>
               </button>
 
               <button

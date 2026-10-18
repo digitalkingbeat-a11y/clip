@@ -1,8 +1,6 @@
 import crypto from "crypto";
 import { readDb, writeDb } from "./storage";
 
-// TODO: Real Stripe Checkout must replace the temporary demo entitlement after the client meeting.
-// TEMPORARY DEMO ENTITLEMENT: Creator plan unlocked for client walkthrough.
 export interface Plan {
   id: "basic" | "pro" | "agent" | "agent_studio" | "automated_pipeline" | "free" | "starter" | "creator";
   name: string;
