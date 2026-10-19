@@ -21,6 +21,10 @@ import { storageService } from "./server/r2";
 import {
   createCheckoutSession,
   createCreditPackCheckoutSession,
+  createBillingPortalSession,
+  setStripeCancelAtPeriodEnd,
+  stripePriceStatus,
+  isStripeTestMode,
   verifyStripeWebhook,
   processStripeWebhookEvent,
   generateTestWebhookSignature,
@@ -2971,47 +2975,78 @@ app.get("/api/billing/usage", (req, res) => {
     ...usage,
     isStripeConfigured: isStripeConfigured(),
     isStripeWebhookConfigured: isStripeWebhookConfigured(),
+    isStripeTestMode: isStripeTestMode(),
+    stripePrices: stripePriceStatus(),
     isR2Configured: isR2Configured(),
   });
 });
 
-// 3. Create Checkout Session
-app.post("/api/billing/create-checkout-session", async (req, res) => {
+// 3. Create Checkout Session (existing subscribers are sent to the Billing Portal instead)
+function billingReturnOrigin(req: any): string {
+  return String(req.headers.origin || `${req.protocol}://${req.get("host")}`);
+}
+app.post("/api/billing/create-checkout-session", async (req: any, res) => {
   try {
-    const { planId } = req.body;
-    const origin = req.headers.origin || "http://localhost:3000";
+    const { planId } = req.body || {};
+    if (!planId || !PLANS[planId]) return res.status(400).json({ success: false, error: "Pick a plan." });
+    const origin = billingReturnOrigin(req);
     const session = await createCheckoutSession({
-      planId: planId || "creator",
+      planId,
       workspaceId: billingWorkspaceId(req),
+      customerEmail: req.user?.email,
       successUrl: `${origin}/?billing=success`,
       cancelUrl: `${origin}/?billing=cancel`,
     });
     res.json({ success: true, ...session });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
-// 4. Stripe Webhook (Production & Verified Sandbox)
+// 4. Stripe Webhook. Signed with STRIPE_WEBHOOK_SECRET; unsigned/forged events are rejected.
 app.post("/api/billing/webhook", (req, res) => {
   const sig = (req.headers["stripe-signature"] as string) || "";
-  const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+  const rawBody = (req as any).rawBody;
+  if (typeof rawBody !== "string") return res.status(400).json({ success: false, error: "Missing raw body" });
 
   const verification = verifyStripeWebhook(rawBody, sig);
   if (!verification.verified) {
     console.warn("Stripe webhook verification failed:", verification.error);
     return res.status(400).json({ success: false, error: verification.error });
   }
-
-  const result = processStripeWebhookEvent(verification.event);
-  res.json(result);
+  try {
+    const result = processStripeWebhookEvent(verification.event);
+    res.json(result);
+  } catch (err: any) {
+    // 500 makes Stripe retry later; handlers are idempotent on event id.
+    console.error("Stripe webhook handler error:", verification.event?.type, err?.message);
+    res.status(500).json({ success: false, error: "Webhook handler error" });
+  }
 });
 
-// 5. Cancel Subscription
-app.post("/api/billing/cancel-subscription", (req, res) => {
+// 5. Cancel at period end / resume (changes the Stripe subscription, then mirrors it locally)
+app.post("/api/billing/cancel-subscription", async (req, res) => {
   try {
-    const result = billingService.cancelSubscription(billingWorkspaceId(req));
+    const result = await setStripeCancelAtPeriodEnd(billingWorkspaceId(req), true);
     res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+app.post("/api/billing/resume-subscription", async (req, res) => {
+  try {
+    const result = await setStripeCancelAtPeriodEnd(billingWorkspaceId(req), false);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// 5b. Stripe Billing Portal (card, invoices, plan switch, cancel/resume)
+app.post("/api/billing/portal", async (req: any, res) => {
+  try {
+    const portal = await createBillingPortalSession({ workspaceId: billingWorkspaceId(req), returnUrl: `${billingReturnOrigin(req)}/?billing=portal_return` });
+    res.json({ success: true, url: portal.url });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });
   }
@@ -3093,7 +3128,8 @@ app.post("/api/admin/credit-packs", (req, res) => {
 app.post("/api/billing/test-simulate-webhook", (req, res) => {
   try {
     const { eventType, planId } = req.body;
-    const secret = process.env.STRIPE_WEBHOOK_SECRET || "whsec_clipflow_sandbox_secret_key";
+    const secret = process.env.STRIPE_WEBHOOK_SECRET || "";
+    if (!secret.startsWith("whsec_")) return res.status(400).json({ success: false, error: "STRIPE_WEBHOOK_SECRET is not configured" });
 
     const payload = JSON.stringify({
       id: `evt_sim_${Date.now()}`,
@@ -3104,7 +3140,8 @@ app.post("/api/billing/test-simulate-webhook", (req, res) => {
           client_reference_id: billingWorkspaceId(req),
           subscription: `sub_sim_${Date.now()}`,
           customer: "cus_sim_123",
-          metadata: { planId: planId || "creator", workspaceId: billingWorkspaceId(req) },
+          payment_status: "paid",
+          metadata: { planId: planId || "basic", workspaceId: billingWorkspaceId(req) },
         },
       },
     });

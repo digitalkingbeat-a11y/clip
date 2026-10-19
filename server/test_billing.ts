@@ -17,6 +17,7 @@ export interface BillingTestResult {
 export async function runAllBillingTests(): Promise<{ passed: boolean; results: BillingTestResult[] }> {
   const results: BillingTestResult[] = [];
   const testWorkspaceId = `test_ws_${Date.now()}`;
+  const testStripeSubId = `sub_stripe_${Date.now()}`;
 
   // Helper for timing
   const runTest = async (name: string, fn: () => Promise<string | void>) => {
@@ -146,8 +147,11 @@ export async function runAllBillingTests(): Promise<{ passed: boolean; results: 
       data: {
         object: {
           id: "cs_test_123",
+          object: "checkout.session",
+          mode: "subscription",
+          payment_status: "paid",
           client_reference_id: testWorkspaceId,
-          subscription: `sub_stripe_${Date.now()}`,
+          subscription: testStripeSubId,
           customer: "cus_test_123",
           metadata: { planId: "creator", workspaceId: testWorkspaceId },
         },
@@ -259,8 +263,11 @@ export async function runAllBillingTests(): Promise<{ passed: boolean; results: 
       type: "customer.subscription.deleted",
       data: {
         object: {
-          id: `sub_stripe_${Date.now()}`,
-          client_reference_id: testWorkspaceId,
+          id: testStripeSubId,
+          object: "subscription",
+          status: "canceled",
+          customer: "cus_test_123",
+          metadata: { workspaceId: testWorkspaceId },
         },
       },
     };
