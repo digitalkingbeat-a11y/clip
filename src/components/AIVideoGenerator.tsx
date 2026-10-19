@@ -916,15 +916,15 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   return (
     <div id="ai-video-generator-studio" className="flex-1 flex flex-col bg-[#080A0F] text-[#F7F8FA] overflow-hidden">
       {/* Top Header & Provider Selector */}
-      <header className="h-14 border-b border-[#1C222E] bg-[#0C0F16] px-5 flex items-center justify-between z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] flex items-center justify-center text-white shadow-sm">
+      <header className="h-12 md:h-14 border-b border-[#1C222E] bg-[#0C0F16] px-3 md:px-5 flex items-center justify-between gap-2 z-10 flex-shrink-0">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] flex items-center justify-center text-white shadow-sm flex-shrink-0">
             <Film className="w-4 h-4" />
           </div>
-          <div>
-            <h1 className="text-sm font-bold text-white flex items-center gap-2">
-              <span>AI Video Studio</span>
-              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#168CFF]/15 text-[#16D9F5] border border-[#168CFF]/30">
+          <div className="min-w-0">
+            <h1 className="text-sm font-bold text-white flex items-center gap-2 min-w-0">
+              <span className="truncate whitespace-nowrap md:whitespace-normal md:overflow-visible">AI Video Studio</span>
+              <span className="hidden sm:inline text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#168CFF]/15 text-[#16D9F5] border border-[#168CFF]/30 whitespace-nowrap md:whitespace-normal">
                 Multi-Shot Storyboard
               </span>
             </h1>
@@ -954,16 +954,17 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         </div>
 
         {/* Right: Provider & Diagnostics */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-shrink-0 md:flex-shrink">
           {/* Provider Pill */}
           <div className="relative">
             <button
               onClick={() => setShowProviderMenu(!showProviderMenu)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#11151E] border border-[#272D3A] hover:border-[#16D9F5]/40 text-xs font-medium text-gray-200"
+              className="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-lg bg-[#11151E] border border-[#272D3A] hover:border-[#16D9F5]/40 text-xs font-medium text-gray-200"
               title="Select Video Generation Engine"
+              aria-label="Video generation engine"
             >
-              <Zap className="w-3.5 h-3.5 text-[#16D9F5]" />
-              <span className="max-w-[130px] sm:max-w-[190px] truncate">
+              <Zap className="w-3.5 h-3.5 text-[#16D9F5] flex-shrink-0" />
+              <span className="max-w-[96px] sm:max-w-[190px] truncate">
                 {selectedProvider?.name || "ClipFlow Studio Engine"}
               </span>
               <ChevronDown className="w-3 h-3 text-gray-400" />
@@ -971,7 +972,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
             {/* Provider Dropdown */}
             {showProviderMenu && (
-              <div className="absolute right-0 mt-2 w-80 bg-[#11151E] border border-[#272D3A] rounded-xl shadow-2xl p-2 z-50">
+              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-24px)] bg-[#11151E] border border-[#272D3A] rounded-xl shadow-2xl p-2 z-50">
                 <div className="px-3 py-2 border-b border-[#272D3A] mb-1">
                   <span className="text-[10px] uppercase font-bold text-[#9CA5B5] tracking-wider block">
                     Video Generation Engine
@@ -988,6 +989,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                         setSelectedProviderId(p.id);
                         setShowProviderMenu(false);
                       }}
+                      role="button"
                       className={`p-2 rounded-lg cursor-pointer transition-all border ${
                         selectedProviderId === p.id
                           ? "bg-[#171C27] border-[#16D9F5]/40 text-white"
@@ -1039,7 +1041,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
           <button
             key={st.id}
             onClick={() => setCurrentStep(st.id as any)}
-            className={`px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap transition-all ${
+            className={`px-2.5 py-1 min-h-[40px] md:min-h-0 rounded-lg font-semibold whitespace-nowrap transition-all ${
               currentStep === st.id
                 ? "bg-[#168CFF] text-white shadow-xs"
                 : "text-[#9CA5B5] hover:text-white"

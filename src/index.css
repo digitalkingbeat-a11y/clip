@@ -277,3 +277,56 @@ html, body {
   overflow-x: hidden;
 }
 
+
+/* ==================================================== */
+/* PHONE LAYER (< 768px). Desktop is untouched.          */
+/* Unlayered rules here win over Tailwind utilities.    */
+/* ==================================================== */
+@media (max-width: 767px) {
+  /* iOS zooms into any field under 16px: keep form text at 16px on phones. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Finger-sized tap targets (about 40-44px). */
+  button,
+  select,
+  [role="button"],
+  [role="tab"],
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]) {
+    min-height: 40px;
+  }
+  button,
+  [role="button"],
+  [role="tab"] {
+    min-width: 40px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Readable body text: nothing under 12px on phones. */
+  [class*="text-[7px]"],
+  [class*="text-[7.5px]"],
+  [class*="text-[8.5px]"],
+  [class*="text-[8px]"],
+  [class*="text-[9px]"],
+  [class*="text-[9.5px]"],
+  [class*="text-[10px]"],
+  [class*="text-[10.5px]"],
+  [class*="text-[11px]"],
+  [class*="text-[11.5px]"] {
+    font-size: 12px;
+  }
+
+  /* Opt-out for decorative or dense controls that have a larger tap area around them. */
+  .tap-exempt,
+  .tap-exempt button {
+    min-height: 0;
+    min-width: 0;
+  }
+}
