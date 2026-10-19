@@ -54,7 +54,7 @@ export const PlatformChip: React.FC<{
       }
     : { background: "transparent", color: b.color, borderColor: `${b.color}66`, opacity: 0.6 };
   const pad = size === "xs" ? "px-1 py-0.5 text-[9px] gap-0.5" : "px-2 py-0.5 text-[11px] gap-1";
-  const icon = size === "xs" ? "w-2.5 h-2.5" : "w-3 h-3";
+  const icon = size === "xs" ? (onClick ? "w-4 h-4 md:w-2.5 md:h-2.5" : "w-2.5 h-2.5") : "w-3 h-3";
   const Tag: any = onClick ? "button" : "span";
   return (
     <Tag
@@ -63,7 +63,7 @@ export const PlatformChip: React.FC<{
       disabled={disabled}
       title={title || b.label}
       aria-pressed={onClick ? selected : undefined}
-      className={`inline-flex items-center rounded-full border font-semibold whitespace-nowrap transition-all ${pad} ${
+      className={`inline-flex items-center justify-center rounded-full border font-semibold whitespace-nowrap transition-all ${pad} ${
         onClick ? "cursor-pointer hover:opacity-100" : ""
       } ${disabled ? "!opacity-30 cursor-not-allowed" : ""}`}
       style={style}

@@ -447,37 +447,50 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
                     ? "On: clips are scheduled and post automatically at these times."
                     : "Off: clips go to your calendar as drafts for you to approve."}
                 </p>
-                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-4 lg:grid-cols-7 gap-2">
                   {weekSlots.map((s, i) => (
-                    <div key={s.clip.id} className="rounded-lg border border-[#272D3A] bg-[#151922] p-1.5 text-[10.5px] space-y-1 min-w-0">
-                      <div className="flex justify-between font-bold">
-                        <span>{s.day}</span>
-                        <span className="text-gray-500">{s.date.getMonth() + 1}/{s.date.getDate()}</span>
-                      </div>
-                      <div className="aspect-[9/16] max-h-24 w-full rounded bg-black overflow-hidden">
+                    // Phones: one row per day (thumb | day + time / destinations). sm+: the original 7-across cards.
+                    <div key={s.clip.id} className="rounded-lg border border-[#272D3A] bg-[#151922] p-1.5 text-[10.5px] min-w-0 flex items-center gap-2 sm:flex-col sm:items-stretch sm:gap-1">
+                      <div className="w-12 h-[88px] flex-shrink-0 sm:order-2 sm:w-full sm:h-auto sm:aspect-[9/16] max-h-24 rounded bg-black overflow-hidden">
                         {s.clip.thumbnailUrl ? (
                           <img src={s.clip.thumbnailUrl} alt="" className="w-full h-full object-cover" />
                         ) : (
                           <video src={clipSrc(s.clip)} muted preload="metadata" className="w-full h-full object-cover" />
                         )}
                       </div>
-                      <input
-                        type="time"
-                        value={s.time}
-                        onChange={(e) => setWeekTimes((prev) => prev.map((t, j) => (j === i ? e.target.value : t)))}
-                        className="w-full bg-transparent border border-[#272D3A] rounded px-1 text-[10px]"
-                      />
-                      <div className="flex flex-wrap gap-0.5" aria-label="Destinations">
-                        {Array.from(new Set([...PLAN_PLATFORMS, ...weekPlatforms])).map((p) => (
-                          <PlatformChip
-                            key={p}
-                            platform={p}
-                            size="xs"
-                            showLabel={false}
-                            selected={platformsForDay(i).includes(p)}
-                            onClick={() => toggleDayPlatform(i, p)}
+                      <div className="flex-1 min-w-0 space-y-1.5 sm:contents">
+                        <div className="flex items-center justify-between gap-2 font-bold sm:order-1">
+                          <span>
+                            {s.day} <span className="sm:hidden text-gray-500 font-semibold">{s.date.getMonth() + 1}/{s.date.getDate()}</span>
+                          </span>
+                          <span className="hidden sm:inline text-gray-500">{s.date.getMonth() + 1}/{s.date.getDate()}</span>
+                          <input
+                            type="time"
+                            aria-label={`Post time for ${s.day}`}
+                            value={s.time}
+                            onChange={(e) => setWeekTimes((prev) => prev.map((t, j) => (j === i ? e.target.value : t)))}
+                            className="sm:hidden w-[120px] h-10 bg-transparent border border-[#272D3A] rounded px-2 font-normal"
                           />
-                        ))}
+                        </div>
+                        <input
+                          type="time"
+                          aria-label={`Post time for ${s.day}`}
+                          value={s.time}
+                          onChange={(e) => setWeekTimes((prev) => prev.map((t, j) => (j === i ? e.target.value : t)))}
+                          className="hidden sm:block sm:order-3 w-full bg-transparent border border-[#272D3A] rounded px-1 text-[10px]"
+                        />
+                        <div className="flex flex-wrap gap-1 sm:gap-0.5 sm:order-4" aria-label="Destinations">
+                          {Array.from(new Set([...PLAN_PLATFORMS, ...weekPlatforms])).map((p) => (
+                            <PlatformChip
+                              key={p}
+                              platform={p}
+                              size="xs"
+                              showLabel={false}
+                              selected={platformsForDay(i).includes(p)}
+                              onClick={() => toggleDayPlatform(i, p)}
+                            />
+                          ))}
+                        </div>
                       </div>
                     </div>
                   ))}

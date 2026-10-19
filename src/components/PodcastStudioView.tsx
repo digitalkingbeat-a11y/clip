@@ -887,62 +887,68 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
 
   return (
     <div id="podcast-studio-root" className="flex-1 flex flex-col bg-[#080A0F] text-[#F7F8FA] overflow-y-auto select-none relative">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-[#16D9F5] text-black font-semibold text-xs px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* Global Top Banner & Quick Navigation */}
-      <header className="h-13 bg-[#11151E] border-b border-[#272D3A] px-5 flex items-center justify-between flex-shrink-0 z-20">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#168CFF] to-[#16D9F5] flex items-center justify-center text-black font-black shadow-md">
+      {/* Global Top Banner & Quick Navigation (one compact row on phones) */}
+      <header className="h-12 md:h-13 bg-[#11151E] border-b border-[#272D3A] px-3 md:px-5 flex items-center justify-between gap-2 flex-shrink-0 z-20 sticky top-0">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#168CFF] to-[#16D9F5] flex items-center justify-center text-black font-black shadow-md flex-shrink-0">
             <Radio className="w-4 h-4 text-black" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-white text-sm tracking-tight">Podcast Studio</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-[#16D9F5]/20 text-[#16D9F5] border border-[#16D9F5]/40 uppercase">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-extrabold text-white text-sm tracking-tight truncate">Podcast Studio</span>
+              <span className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-[#16D9F5]/20 text-[#16D9F5] border border-[#16D9F5]/40 uppercase">
                 Double-Ender 4K
               </span>
             </div>
-            <p className="text-[10px] text-[#8F9CAE]">Remote studio interviews with local uncompressed multitrack capture</p>
+            <p className="hidden md:block text-[10px] text-[#8F9CAE]">Remote studio interviews with local uncompressed multitrack capture</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        {/* Host tools: guests joining from a link don't see these. */}
+        {!guestOnly && userRole === "host" && (
+        <div className="flex items-center gap-1.5 md:gap-2.5 flex-shrink-0">
           {/* Guided Tour Button */}
           <button
             id="btn-podcast-tour"
             onClick={() => onStartTour?.("podcast_studio")}
-            className="h-7 px-2.5 rounded-md bg-[#171B24] hover:bg-[#202634] border border-[#272D3A] text-xs text-[#8F9CAE] hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
+            aria-label="Studio tour"
+            className="h-10 md:h-7 px-2.5 rounded-md bg-[#171B24] hover:bg-[#202634] border border-[#272D3A] text-xs text-[#8F9CAE] hover:text-white flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
           >
-            <HelpCircle className="w-3.5 h-3.5 text-[#16D9F5]" />
+            <HelpCircle className="w-4 h-4 md:w-3.5 md:h-3.5 text-[#16D9F5]" />
             <span className="hidden sm:inline">Studio Tour</span>
           </button>
 
           {/* Pricing Tiers Button */}
           <button
             onClick={() => setIsPricingModalOpen(true)}
-            className="h-7 px-2.5 rounded-md bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-xs text-purple-300 font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+            aria-label="Podcast tiers"
+            className="h-10 md:h-7 px-2.5 rounded-md bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-xs text-purple-300 font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
           >
-            <Zap className="w-3.5 h-3.5 text-purple-400" />
+            <Zap className="w-4 h-4 md:w-3.5 md:h-3.5 text-purple-400" />
             <span className="hidden md:inline">Podcast Tiers</span>
           </button>
 
           {/* Backend Requirements Check */}
           <button
             onClick={() => setIsBackendRequirementsOpen(true)}
-            className="h-7 px-2.5 rounded-md bg-[#171B24] hover:bg-[#202634] border border-[#272D3A] text-xs text-[#8F9CAE] hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors"
+            aria-label="Infrastructure requirements"
+            className="hidden sm:flex h-10 md:h-7 px-2.5 rounded-md bg-[#171B24] hover:bg-[#202634] border border-[#272D3A] text-xs text-[#8F9CAE] hover:text-white items-center justify-center gap-1.5 cursor-pointer transition-colors"
             title="View infrastructure requirements (R2 / WebRTC / TURN)"
           >
             <Server className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden lg:inline">Infrastructure</span>
           </button>
         </div>
+        )}
       </header>
+
+      {/* Toast Notification: sits below the header so it never covers it */}
+      {toastMessage && (
+        <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+76px)] md:bottom-auto md:top-16 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-24px)] bg-[#16D9F5] text-black font-semibold text-xs px-4 py-2 rounded-2xl md:rounded-full shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 1. LOBBY VIEW: Sessions, Quick Create & Guest Link Joining */}

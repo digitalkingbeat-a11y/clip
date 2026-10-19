@@ -170,8 +170,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [shots, setShots] = useState<StoryboardShot[]>([]);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [costEstimate, setCostEstimate] = useState<number>(1.5);
-  // "stock" = free stock footage from Pixabay or Pexels (default); "veo" = Veo Lite AI footage (credits); "preview" = free text cards.
-  const [renderMode, setRenderMode] = useState<"stock" | "veo" | "preview">("stock");
+  // "stock" = free stock footage from Pixabay or Pexels (default); "veo" = Veo Lite / "runninghub" = RunningHub AI footage (credits); "preview" = free text cards.
+  const [renderMode, setRenderMode] = useState<"stock" | "veo" | "runninghub" | "preview">("stock");
+  const [rhConfig, setRhConfig] = useState<{ configured: boolean; notConfiguredReason?: string; creditsPerSecond: number; creditsPerJob: number; minSeconds: number; maxSeconds: number; imageToVideo?: boolean } | null>(null);
   const [stockNotice, setStockNotice] = useState<string | null>(null);
   const [stockConfig, setStockConfig] = useState<{ available: boolean; provider: "pixabay" | "pexels" | null; creditLine: string | null; creditUrl: string | null } | null>(null);
   const [veoConfig, setVeoConfig] = useState<{ available: boolean; creditsPerSecond: number; allowedDurations: number[] } | null>(null);
@@ -483,6 +484,13 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const veoCreditsForShots = (list: StoryboardShot[]) =>
     list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 1), 0);
 
+  // RunningHub: clip length is the scene length within its 4-15s range; billed per second or per job.
+  const rhSecondsFor = (d: number) => Math.min(rhConfig?.maxSeconds || 15, Math.max(rhConfig?.minSeconds || 4, Math.ceil(d || 5)));
+  const rhCreditsFor = (d: number) =>
+    rhConfig?.creditsPerJob ? Math.ceil(rhConfig.creditsPerJob) : Math.ceil(rhSecondsFor(d) * (rhConfig?.creditsPerSecond || 2));
+  const aiCreditsForShots = (list: StoryboardShot[]) =>
+    renderMode === "runninghub" ? list.reduce((sum, s) => sum + rhCreditsFor(s.duration), 0) : veoCreditsForShots(list);
+
   useEffect(() => {
     fetch("/api/ai/stock/config")
       .then((r) => r.json())
@@ -491,6 +499,13 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   }, []);
 
   useEffect(() => {
+    fetch("/api/video/providers")
+      .then((r) => r.json())
+      .then((d) => {
+        const rh = d.success && (d.providers || []).find((p: any) => p.id === "runninghub");
+        if (rh) setRhConfig(rh);
+      })
+      .catch(() => {});
     fetch("/api/ai/veo/config")
       .then((r) => r.json())
       .then((d) => {
@@ -501,29 +516,31 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
       .catch(() => {});
   }, []);
 
-  // Submit a Veo job for one shot (server de-duplicates by shot + prompt) and poll until done.
-  const renderShotWithVeo = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string }> => {
+  // Submit an AI video job for one shot through the provider-independent API (server
+  // de-duplicates by shot + prompt) and poll until it's done.
+  const renderShotWithAI = async (shot: StoryboardShot, provider: "veo" | "runninghub"): Promise<{ videoUrl: string; thumbnailUrl?: string }> => {
     const key = [shot.prompt, shot.duration, aspectRatio, tone].join("|");
-    const res = await fetch("/api/ai/veo/shots", {
+    const res = await fetch("/api/video/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shot, aspectRatio, style: tone, idempotencyKey: key }),
+      body: JSON.stringify({ provider, shot, aspectRatio, style: tone, idempotencyKey: key }),
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || "Couldn't start the AI video job");
     const jobId = data.job.id;
+    const veoLabel: Record<string, string> = {
+      queued: "Queued for Veo…",
+      submitting: "Sending to Veo…",
+      running: "Veo is generating (1–5 min)…",
+      downloading: "Saving to your Media Library…",
+    };
     for (;;) {
-      const r = await fetch(`/api/ai/veo/jobs?ids=${encodeURIComponent(jobId)}`);
+      const r = await fetch(`/api/video/jobs/${encodeURIComponent(jobId)}`);
       const d = await r.json();
-      const job = d.jobs?.[0];
+      const job = d.job;
       if (!job) throw new Error("AI video job disappeared");
-      const label: Record<string, string> = {
-        queued: "Queued for Veo…",
-        submitting: "Sending to Veo…",
-        running: "Veo is generating (1–5 min)…",
-        downloading: "Saving to your Media Library…",
-      };
-      setShotJobStatus((m) => ({ ...m, [shot.id]: label[job.status] || job.status }));
+      const label = provider === "veo" ? veoLabel[job.status] || job.status : `${job.message} ${job.progress}%`;
+      setShotJobStatus((m) => ({ ...m, [shot.id]: label }));
       if (job.status === "completed") return { videoUrl: job.videoUrl, thumbnailUrl: job.thumbnailUrl };
       if (job.status === "failed") throw new Error(job.error || "AI video generation failed (credits refunded)");
       await new Promise((ok) => setTimeout(ok, 5000));
@@ -559,9 +576,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
   const renderOneShot = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string; version: any; extra?: any }> => {
     if (renderMode === "stock") return renderShotWithStock(shot);
-    if (renderMode === "veo") {
-      const out = await renderShotWithVeo(shot);
-      const version = { id: `ver_${shot.id}_veo_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
+    if (renderMode === "veo" || renderMode === "runninghub") {
+      const out = await renderShotWithAI(shot, renderMode);
+      const version = { id: `ver_${shot.id}_${renderMode === "veo" ? "veo" : "rh"}_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
       return { videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl, version };
     }
     const res = await fetch("/api/ai/render-shot", {
@@ -623,7 +640,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     setIsRenderingVideo(true);
     setRenderProgress(10);
     setStockNotice(null);
-    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : renderMode === "stock" ? "Finding free stock footage for each scene…" : "Rendering quick preview cards…");
+    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : renderMode === "runninghub" ? "Sending every shot to RunningHub (they generate in parallel)…" : renderMode === "stock" ? "Finding free stock footage for each scene…" : "Rendering quick preview cards…");
 
     try {
       // Re-render shots that are missing, or that were made in the other mode.
@@ -925,15 +942,15 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   return (
     <div id="ai-video-generator-studio" className="flex-1 flex flex-col bg-[#080A0F] text-[#F7F8FA] overflow-hidden">
       {/* Top Header & Provider Selector */}
-      <header className="h-14 border-b border-[#1C222E] bg-[#0C0F16] px-5 flex items-center justify-between z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] flex items-center justify-center text-white shadow-sm">
+      <header className="h-12 md:h-14 border-b border-[#1C222E] bg-[#0C0F16] px-3 md:px-5 flex items-center justify-between gap-2 z-10 flex-shrink-0">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#933CFF] to-[#16D9F5] flex items-center justify-center text-white shadow-sm flex-shrink-0">
             <Film className="w-4 h-4" />
           </div>
-          <div>
-            <h1 className="text-sm font-bold text-white flex items-center gap-2">
-              <span>AI Video Studio</span>
-              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#168CFF]/15 text-[#16D9F5] border border-[#168CFF]/30">
+          <div className="min-w-0">
+            <h1 className="text-sm font-bold text-white flex items-center gap-2 min-w-0">
+              <span className="truncate whitespace-nowrap md:whitespace-normal md:overflow-visible">AI Video Studio</span>
+              <span className="hidden sm:inline text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#168CFF]/15 text-[#16D9F5] border border-[#168CFF]/30 whitespace-nowrap md:whitespace-normal">
                 Multi-Shot Storyboard
               </span>
             </h1>
@@ -963,16 +980,17 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
         </div>
 
         {/* Right: Provider & Diagnostics */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-shrink-0 md:flex-shrink">
           {/* Provider Pill */}
           <div className="relative">
             <button
               onClick={() => setShowProviderMenu(!showProviderMenu)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#11151E] border border-[#272D3A] hover:border-[#16D9F5]/40 text-xs font-medium text-gray-200"
+              className="flex items-center gap-1.5 px-2.5 md:px-3 py-1.5 rounded-lg bg-[#11151E] border border-[#272D3A] hover:border-[#16D9F5]/40 text-xs font-medium text-gray-200"
               title="Select Video Generation Engine"
+              aria-label="Video generation engine"
             >
-              <Zap className="w-3.5 h-3.5 text-[#16D9F5]" />
-              <span className="max-w-[130px] sm:max-w-[190px] truncate">
+              <Zap className="w-3.5 h-3.5 text-[#16D9F5] flex-shrink-0" />
+              <span className="max-w-[96px] sm:max-w-[190px] truncate">
                 {selectedProvider?.name || "ClipFlow Studio Engine"}
               </span>
               <ChevronDown className="w-3 h-3 text-gray-400" />
@@ -980,7 +998,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
             {/* Provider Dropdown */}
             {showProviderMenu && (
-              <div className="absolute right-0 mt-2 w-80 bg-[#11151E] border border-[#272D3A] rounded-xl shadow-2xl p-2 z-50">
+              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-24px)] bg-[#11151E] border border-[#272D3A] rounded-xl shadow-2xl p-2 z-50">
                 <div className="px-3 py-2 border-b border-[#272D3A] mb-1">
                   <span className="text-[10px] uppercase font-bold text-[#9CA5B5] tracking-wider block">
                     Video Generation Engine
@@ -997,6 +1015,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                         setSelectedProviderId(p.id);
                         setShowProviderMenu(false);
                       }}
+                      role="button"
                       className={`p-2 rounded-lg cursor-pointer transition-all border ${
                         selectedProviderId === p.id
                           ? "bg-[#171C27] border-[#16D9F5]/40 text-white"
@@ -1048,7 +1067,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
           <button
             key={st.id}
             onClick={() => setCurrentStep(st.id as any)}
-            className={`px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap transition-all ${
+            className={`px-2.5 py-1 min-h-[40px] md:min-h-0 rounded-lg font-semibold whitespace-nowrap transition-all ${
               currentStep === st.id
                 ? "bg-[#168CFF] text-white shadow-xs"
                 : "text-[#9CA5B5] hover:text-white"
@@ -1494,10 +1513,10 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 </button>
               </div>
 
-              {/* Render mode: free stock footage (default), Veo Lite AI footage (credits) or quick preview */}
+              {/* Render mode: free stock footage (default), Veo Lite or RunningHub AI footage (credits), or quick preview */}
               <div className="p-3 rounded-xl bg-[#11151E] border border-[#272D3A] space-y-2" id="render-mode-picker">
                 <span className="text-[11px] font-semibold text-gray-300">How should shots be made?</span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     onClick={() => setRenderMode("stock")}
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "stock" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"}`}
@@ -1514,7 +1533,18 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                     <span className="text-[10px] text-gray-400">
                       {veoConfig?.available
                         ? `~${veoCreditsForShots(shots)} credits for ${shots.length} shots (${veoConfig.creditsPerSecond}/sec)`
-                        : "Not available right now"}
+                        : "Not set up"}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => rhConfig?.configured && setRenderMode("runninghub")}
+                    disabled={!rhConfig?.configured}
+                    title={rhConfig?.configured ? undefined : rhConfig?.notConfiguredReason}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "runninghub" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"} ${!rhConfig?.configured ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    <span className="font-bold block">AI video, RunningHub (credits)</span>
+                    <span className="text-[10px] text-gray-400">
+                      {rhConfig?.configured ? `~${shots.reduce((a, s) => a + rhCreditsFor(s.duration), 0)} credits for ${shots.length} shots` : "Not set up"}
                     </span>
                   </button>
                   <button
@@ -1528,6 +1558,11 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 {renderMode === "veo" && (
                   <p className="text-[10px] text-gray-500">
                     Veo makes 4, 6 or 8 second clips; each is trimmed to its scene length. Failed shots are refunded.
+                  </p>
+                )}
+                {renderMode === "runninghub" && (
+                  <p className="text-[10px] text-gray-500">
+                    RunningHub makes {rhConfig?.minSeconds || 4}–{rhConfig?.maxSeconds || 15} second clips{rhConfig?.imageToVideo ? " (from the scene's start frame when it has one)" : ""}. Failed shots are refunded.
                   </p>
                 )}
                 {renderMode === "stock" && (
@@ -1551,7 +1586,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="font-semibold text-gray-300">Sequence Timeline Preview</span>
                   <span className="text-[#16D9F5] font-mono">
-                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" ? `~${veoCreditsForShots(shots)} credits` : renderMode === "stock" ? "Free stock footage" : "Free preview"}
+                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" || renderMode === "runninghub" ? `~${aiCreditsForShots(shots)} credits` : renderMode === "stock" ? "Free stock footage" : "Free preview"}
                   </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1.5">
@@ -1834,6 +1869,8 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                                 : shot.status === "completed"
                                 ? (shot as any).renderMode === "veo"
                                   ? "✓ AI video (Veo)"
+                                  : (shot as any).renderMode === "runninghub"
+                                  ? "✓ AI video (RunningHub)"
                                   : (shot as any).stockAttribution
                                   ? "✓ Stock footage"
                                   : (shot as any).stockFallback
@@ -1861,7 +1898,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                               className="px-3 py-1.5 rounded-lg bg-[#168CFF]/20 text-[#16D9F5] hover:bg-[#168CFF] hover:text-white border border-[#168CFF]/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
                             >
                               <Play className={`w-3 h-3 ${shot.status === "generating" ? "animate-spin" : ""}`} />
-                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 1)} credits)` : renderMode === "stock" ? "Find stock clip (free)" : "Quick preview"}</span>
+                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 1)} credits)` : renderMode === "runninghub" ? `Generate with RunningHub (${rhCreditsFor(shot.duration)} credits)` : renderMode === "stock" ? "Find stock clip (free)" : "Quick preview"}</span>
                             </button>
                             </div>
                           </div>

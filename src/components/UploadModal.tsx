@@ -393,14 +393,19 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               <p className="font-semibold text-white text-xs">
                 {isDragOver
                   ? "Drop multiple media files here..."
-                  : "Click to select or drag & drop multiple files"}
+                  : (
+                    <>
+                      <span className="md:hidden">Tap to choose videos, photos or audio</span>
+                      <span className="hidden md:inline">Click to select or drag &amp; drop multiple files</span>
+                    </>
+                  )}
               </p>
               <p className="text-[11px] text-[#9CA5B5] mt-1">
                 Supports batch selection of <span className="text-gray-300">MP4, MOV, WebM</span> videos, <span className="text-gray-300">MP3, WAV, AAC</span> audios, and <span className="text-gray-300">PNG, JPG</span> images
               </p>
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] px-2 py-0.5 rounded bg-[#171C27] text-gray-300 border border-[#272D3A] font-mono">
+              <span className="hidden md:inline text-[10px] px-2 py-0.5 rounded bg-[#171C27] text-gray-300 border border-[#272D3A] font-mono">
                 ⌘ / Shift + Click for multi-select
               </span>
               <span className="text-[10px] text-[#9CA5B5]">Up to 1 GB per batch</span>

@@ -40,6 +40,9 @@ import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService, PodcastError } from "./server/podcastService";
 import { stockFootageService, stockAvailable, STOCK_CONFIG, PROVIDER_INFO, activeStockProvider, enabledStockProviders } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
+import crypto from "crypto";
+import { runninghubJobService, listVideoProviders, generateVideo, getVideoJobs } from "./server/videoGeneration";
+import { createRunningHubProvider } from "./server/runninghubService";
 import { registerOwnedFile, resolveOwnedMediaPath, ownedFileNames } from "./server/mediaOwnership";
 import {
   getStorageSigningSecret,
@@ -2295,6 +2298,22 @@ app.get("/api/ai/veo/config", (req, res) => {
     googlePriceUsdPerSecond: VEO_CONFIG.googlePriceUsdPerSecond,
   });
 });
+// One prompt builder for every AI video provider (Veo route behaviour unchanged).
+function buildShotVideoPrompt(shot: any, style: string | undefined, ar: "9:16" | "16:9" | "1:1"): string {
+  const visual = String(shot.prompt || shot.visualDescription || shot.title || "").trim();
+  if (!visual) return "";
+  return [
+    visual,
+    style ? `Style: ${style}.` : "",
+    shot.cameraAngle ? `Camera: ${shot.cameraAngle}${shot.cameraMovement ? ", " + String(shot.cameraMovement).replace(/_/g, " ") : ""}.` : "",
+    shot.audio?.ambience ? `Ambient sound: ${shot.audio.ambience}.` : "",
+    ar === "9:16" ? "Vertical 9:16 framing." : ar === "1:1" ? "Square 1:1 framing." : "Widescreen 16:9 framing.",
+    "No on-screen text or subtitles.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 app.post("/api/ai/veo/shots", (req: any, res) => {
   if (!veoAvailable()) {
     return res.status(503).json({ success: false, veoUnavailable: true, error: "AI video (Veo) isn't available right now. Use Stock footage or Quick preview (free)." });
@@ -2302,20 +2321,12 @@ app.post("/api/ai/veo/shots", (req: any, res) => {
   const { shot, aspectRatio, style, idempotencyKey } = req.body || {};
   if (!shot || !shot.id) return res.status(400).json({ success: false, error: "Shot data is required." });
   const ar = aspectRatio === "16:9" ? "16:9" : "9:16";
-  const visual = String(shot.prompt || shot.visualDescription || shot.title || "").trim();
-  if (!visual) return res.status(400).json({ success: false, error: "This shot has no visual description." });
-  const parts = [
-    visual,
-    style ? `Style: ${style}.` : "",
-    shot.cameraAngle ? `Camera: ${shot.cameraAngle}${shot.cameraMovement ? ", " + String(shot.cameraMovement).replace(/_/g, " ") : ""}.` : "",
-    shot.audio?.ambience ? `Ambient sound: ${shot.audio.ambience}.` : "",
-    ar === "9:16" ? "Vertical 9:16 framing." : "Widescreen 16:9 framing.",
-    "No on-screen text or subtitles.",
-  ].filter(Boolean);
+  const prompt = buildShotVideoPrompt(shot, style, ar);
+  if (!prompt) return res.status(400).json({ success: false, error: "This shot has no visual description." });
   const out = veoJobService.createJob({
     userId: currentUserId(req),
     shotId: String(shot.id),
-    prompt: parts.join(" "),
+    prompt,
     aspectRatio: ar,
     sceneDuration: Number(shot.duration) || 4,
     idempotencyKey: idempotencyKey ? `${shot.id}:${String(idempotencyKey).slice(0, 80)}` : undefined,
@@ -2326,6 +2337,53 @@ app.post("/api/ai/veo/shots", (req: any, res) => {
 app.get("/api/ai/veo/jobs", (req: any, res) => {
   const ids = typeof req.query.ids === "string" && req.query.ids ? String(req.query.ids).split(",") : undefined;
   res.json({ success: true, jobs: veoJobService.getJobs(currentUserId(req), ids) });
+});
+
+// Provider-independent AI video generation (server/videoGeneration.ts). Same job shape for
+// every provider; finished videos land in storage/renders + the Media Library, owner-scoped.
+app.get("/api/video/providers", (req: any, res) => {
+  res.json({ success: true, providers: listVideoProviders() });
+});
+app.post("/api/video/generate", (req: any, res) => {
+  const { provider, shot, prompt: rawPrompt, aspectRatio, style, idempotencyKey, sceneDuration, imageUrl } = req.body || {};
+  if (provider !== "veo" && provider !== "runninghub") {
+    return res.status(400).json({ success: false, error: "provider must be 'veo' or 'runninghub'." });
+  }
+  const ar: "9:16" | "16:9" | "1:1" = aspectRatio === "16:9" ? "16:9" : aspectRatio === "1:1" && provider !== "veo" ? "1:1" : "9:16";
+  const prompt = shot ? buildShotVideoPrompt(shot, style, ar) : String(rawPrompt || "").trim().slice(0, 3500);
+  if (!prompt) return res.status(400).json({ success: false, error: "A prompt or a shot with a visual description is required." });
+  const shotId = String(shot?.id || "").slice(0, 100) || `prompt_${crypto.createHash("sha256").update(prompt).digest("hex").slice(0, 12)}`;
+  // RunningHub can start from an image (the shot's start frame) when image-to-video is set up.
+  let startImage = typeof imageUrl === "string" && imageUrl ? imageUrl : undefined;
+  if (!startImage && provider === "runninghub" && shot?.startFrameUrl && listVideoProviders().find((p) => p.id === "runninghub")?.imageToVideo) {
+    startImage = String(shot.startFrameUrl);
+  }
+  if (startImage) {
+    // Our own /storage links (relative, signed or absolute) are uploaded from disk; anything else must be public https.
+    const m = startImage.match(/\/storage\/[^?#]+/);
+    if (m && resolveOwnedMediaPath(m[0], currentUserId(req))) startImage = m[0];
+  }
+  const out = generateVideo({
+    provider,
+    userId: currentUserId(req),
+    shotId,
+    prompt,
+    aspectRatio: ar,
+    sceneDuration: Number(shot?.duration ?? sceneDuration) || (provider === "veo" ? 4 : 5),
+    imageUrl: startImage,
+    idempotencyKey: idempotencyKey ? `${shotId}:${String(idempotencyKey).slice(0, 80)}` : undefined,
+  });
+  if (!out.job) return res.status(out.status || 500).json({ success: false, outOfCredits: out.outOfCredits, error: out.error });
+  res.json({ success: true, reused: !!out.reused, job: out.job });
+});
+app.get("/api/video/jobs", (req: any, res) => {
+  const ids = typeof req.query.ids === "string" && req.query.ids ? String(req.query.ids).split(",").slice(0, 100) : undefined;
+  res.json({ success: true, jobs: getVideoJobs(currentUserId(req), ids) });
+});
+app.get("/api/video/jobs/:id", (req: any, res) => {
+  const job = getVideoJobs(currentUserId(req), [String(req.params.id)])[0];
+  if (!job) return res.status(404).json({ success: false, error: "Job not found." });
+  res.json({ success: true, job });
 });
 
 // 5. Prompt-Based Shot Editing & Versioning
@@ -3629,6 +3687,8 @@ async function startServer() {
 
   veoJobService.configure(createGenAIVeoProvider(() => getGenAI()), billingService as any);
   veoJobService.start();
+  runninghubJobService.configure(createRunningHubProvider(), billingService as any);
+  runninghubJobService.start();
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`ClipFlow Video server running on http://0.0.0.0:${PORT}`);
     try {

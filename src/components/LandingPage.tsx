@@ -71,7 +71,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ plans, creditPacks, on
         {menuOpen && (
           <div className="md:hidden border-t border-[#1C222E] px-4 py-4 space-y-3 bg-[#0C0F16]">
             {navLinks.map((l) => (
-              <a key={l.href} href={l.href} onClick={() => setMenuOpen(false)} className="block text-sm text-[#9CA5B5]">{l.label}</a>
+              <a key={l.href} href={l.href} onClick={() => setMenuOpen(false)} className="flex items-center min-h-[44px] text-sm text-[#9CA5B5]">{l.label}</a>
             ))}
             <div className="flex gap-3 pt-2">
               <button onClick={onLogIn} className="flex-1 py-2 rounded-lg border border-[#272D3A] text-sm font-semibold">Log in</button>
