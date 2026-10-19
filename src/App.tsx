@@ -167,6 +167,18 @@ export default function App() {
   const [activeJob, setActiveJob] = useState<any | null>(null);
   const [isRetryingJob, setIsRetryingJob] = useState<boolean>(false);
 
+  // Phone layout (< 768px) swaps the desktop timeline for the touch editor.
+  const [isPhoneLayout, setIsPhoneLayout] = useState<boolean>(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 767px)").matches : false
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(max-width: 767px)");
+    const onChange = () => setIsPhoneLayout(mq.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+
   // Local storage save feedback indicator: 'saving' | 'saved'
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "idle">("saved");
   const [lastSavedAt, setLastSavedAt] = useState<Date>(() => new Date());
@@ -585,13 +597,13 @@ export default function App() {
         if (url) {
           window.location.href = url;
         } else {
-          alert("Checkout couldn't be started. Please try again.");
+          setBillingBanner({ message: "Checkout couldn't be started. Please try again.", type: "warning" });
         }
       } else {
-        alert(data.error || "Failed to initiate plan upgrade");
+        setBillingBanner({ message: data.error || "Couldn't start the plan upgrade.", type: "warning" });
       }
     } catch (e: any) {
-      alert("Error upgrading plan: " + e.message);
+      setBillingBanner({ message: "Couldn't start the plan upgrade: " + e.message, type: "warning" });
     }
   };
 
@@ -607,10 +619,10 @@ export default function App() {
         // Credits are added after Stripe confirms payment (webhook).
         if (data.checkoutUrl) window.location.href = data.checkoutUrl;
       } else {
-        alert(data.error || "Failed to purchase credit pack");
+        setBillingBanner({ message: data.error || "Couldn't start the credit purchase.", type: "warning" });
       }
     } catch (e: any) {
-      alert("Error purchasing credits: " + e.message);
+      setBillingBanner({ message: "Couldn't start the credit purchase: " + e.message, type: "warning" });
     }
   };
 
@@ -626,7 +638,7 @@ export default function App() {
         fetchBillingData();
       }
     } catch (e: any) {
-      alert("Error canceling subscription: " + e.message);
+      setBillingBanner({ message: "Couldn't cancel the subscription: " + e.message, type: "warning" });
     }
   };
 
@@ -1140,13 +1152,14 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative min-h-0">
         {/* Dismissible Beta Preview Top Banner */}
         {showBetaBanner && (
-          <div className="bg-gradient-to-r from-[#168CFF]/20 via-[#933CFF]/20 to-[#16D9F5]/20 border-b border-[#16D9F5]/30 text-gray-200 px-3 py-1 text-[11px] flex items-center justify-between z-40 select-none">
-            <div className="flex items-center gap-2">
+          <div className="bg-gradient-to-r from-[#168CFF]/20 via-[#933CFF]/20 to-[#16D9F5]/20 border-b border-[#16D9F5]/30 text-gray-200 pl-3 pr-1 md:px-3 py-0 md:py-1 text-[11px] flex items-center justify-between gap-2 z-40 select-none">
+            <div className="flex items-center gap-2 min-w-0">
               <span className="px-1.5 py-0.2 rounded bg-[#16D9F5]/20 text-[#16D9F5] font-bold text-[9px] uppercase tracking-wider border border-[#16D9F5]/30">
                 Beta preview
               </span>
-              <span className="text-gray-300">
-                ClipFlow Beta Preview • Ingest, AI clipping, timeline editing, and client-side rendering active.
+              <span className="text-gray-300 truncate">
+                <span className="md:hidden">ClipFlow is in beta.</span>
+                <span className="hidden md:inline">ClipFlow Beta Preview • Ingest, AI clipping, timeline editing, and client-side rendering active.</span>
               </span>
             </div>
             <button
@@ -1156,7 +1169,7 @@ export default function App() {
                   localStorage.setItem("clipflow_hide_beta_banner", "true");
                 } catch {}
               }}
-              className="text-gray-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
+              className="text-gray-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
               title="Dismiss beta banner"
               aria-label="Dismiss banner"
             >
@@ -1207,7 +1220,8 @@ export default function App() {
         {/* Global Billing / Subscription Action Notification Banner */}
         {billingBanner && currentView !== "editor" && (
           <div
-            className={`px-4 py-2.5 flex items-center justify-between text-xs select-none border-b transition-all ${
+            role="status"
+            className={`px-4 py-2.5 flex items-center justify-between gap-2 text-xs select-none border-b transition-all ${
               billingBanner.type === "success"
                 ? "bg-emerald-950/80 border-emerald-500/30 text-emerald-200"
                 : billingBanner.type === "warning"
@@ -1225,7 +1239,8 @@ export default function App() {
             </div>
             <button
               onClick={() => setBillingBanner(null)}
-              className="text-[#9CA5B5] hover:text-white p-1 rounded transition-colors"
+              aria-label="Dismiss message"
+              className="text-[#9CA5B5] hover:text-white p-1 rounded transition-colors flex items-center justify-center flex-shrink-0"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -1569,6 +1584,21 @@ export default function App() {
           {currentView === "editor" && (
             <div className="flex flex-1 flex-col overflow-hidden min-h-0 h-full w-full">
               <div className="flex-1 flex flex-col w-full h-full min-h-0 min-w-0 overflow-hidden">
+                {isPhoneLayout ? (
+                <MobileEditorView
+                  aspectRatio={aspectRatio}
+                  onSetAspectRatio={setAspectRatio}
+                  brandKit={brandKit}
+                  tracks={timelineTracks}
+                  items={timelineItems}
+                  onUpdateItems={setTimelineItems}
+                  onUpdateTracks={setTimelineTracks}
+                  onOpenExportModal={() => setIsExportModalOpen(true)}
+                  activeProject={activeProject}
+                  mediaLibrary={mediaLibrary}
+                  onMediaUploaded={handleMediaAssetsAdded}
+                />
+                ) : (
                 <TimelineEditor
                   aspectRatio={aspectRatio}
                   onSetAspectRatio={setAspectRatio}
@@ -1592,6 +1622,7 @@ export default function App() {
                   onToggleMainNav={() => setIsMainNavOpen((prev) => !prev)}
                   isMainNavOpen={isMainNavOpen}
                 />
+                )}
               </div>
             </div>
           )}
@@ -1691,12 +1722,12 @@ export default function App() {
                       <div className="aspect-video bg-black rounded-lg overflow-hidden relative mb-2">
                         <img src={proj.sourceThumbnail} alt={proj.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         <span className="absolute bottom-1.5 right-1.5 text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/80 text-white">
-                          {Math.floor(proj.duration / 60)}m {proj.duration % 60}s
+                          {Math.floor((Number(proj.duration) || 0) / 60)}m {Math.round((Number(proj.duration) || 0) % 60)}s
                         </span>
                       </div>
                       <h3 className="text-xs font-bold text-white truncate">{proj.name}</h3>
                       <div className="flex items-center justify-between mt-1 text-[10px] text-[#9CA5B5]">
-                        <span className="capitalize">{proj.type.replace("_", " ")}</span>
+                        <span className="capitalize">{String(proj.type || "project").replace("_", " ")}</span>
                         <span className="text-[#16D9F5]">Open Project →</span>
                       </div>
 
@@ -1716,7 +1747,7 @@ export default function App() {
                                 className="text-[9px] px-1.5 py-0.5 rounded bg-[#162030] text-gray-300 border border-[#27354D] flex items-center gap-1"
                               >
                                 <span className="w-1.5 h-1.5 rounded-full bg-[#16D9F5]" />
-                                <span className="capitalize">{v.destination.replace("_", " ")}</span>
+                                <span className="capitalize">{String(v.destination || "export").replace("_", " ")}</span>
                               </span>
                             ))}
                           </div>
@@ -1885,10 +1916,10 @@ export default function App() {
                   if (d.success && d.account) {
                     setSocialAccounts((prev) => [...prev.filter((a) => a.platform !== platform), d.account]);
                   } else {
-                    alert(d.error || "Couldn't connect this account.");
+                    setBillingBanner({ message: d.error || "Couldn't connect this account.", type: "warning" });
                   }
                 } catch (e: any) {
-                  alert("Couldn't connect this account: " + e.message);
+                  setBillingBanner({ message: "Couldn't connect this account: " + e.message, type: "warning" });
                 }
               }}
             />
@@ -2006,8 +2037,8 @@ export default function App() {
                   </p>
                 </div>
 
-                <div className="bg-[#11151E] border border-[#272D3A] p-5 rounded-xl flex flex-wrap gap-4 text-xs">
-                  <span className="font-bold text-white">Legal & support:</span>
+                <div className="bg-[#11151E] border border-[#272D3A] p-5 rounded-xl flex flex-wrap items-center gap-x-4 gap-y-0 md:gap-4 text-xs">
+                  <span className="font-bold text-white w-full md:w-auto">Legal & support:</span>
                   <button onClick={() => openLegal("privacy")} className="text-[#16D9F5] hover:underline cursor-pointer">Privacy Policy</button>
                   <button onClick={() => openLegal("terms")} className="text-[#16D9F5] hover:underline cursor-pointer">Terms of Service</button>
                   <button onClick={() => openLegal("contact")} className="text-[#16D9F5] hover:underline cursor-pointer">Contact</button>

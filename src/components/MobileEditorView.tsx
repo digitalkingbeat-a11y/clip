@@ -1,1458 +1,583 @@
-import React, { useState, useRef, useEffect } from "react";
-import {
-  Play,
-  Pause,
-  Undo2,
-  Redo2,
-  Download,
-  Plus,
-  Scissors,
-  Split,
-  Type,
-  Subtitles,
-  Music,
-  Gauge,
-  Trash2,
-  Check,
-  X,
-  Volume2,
-  VolumeX,
-  Sparkles,
-  Smartphone,
-  Tv,
-  Square,
-  CheckCircle2,
-  RefreshCw,
-  Sliders,
-  Save,
-  Info,
-  ZoomIn,
-  ZoomOut,
-  FolderOpen,
-  Camera,
-  Film,
-  Wand2,
-  Eye,
-  AlertCircle,
-  Edit2,
-} from "lucide-react";
-import { AspectRatio, BrandKit, TimelineItem, TimelineTrack, Project, MediaItem } from "../types";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Play, Pause, Undo2, Redo2, Download, Plus, Split, Type, Gauge, Volume2, Trash2, X, Smartphone, ZoomIn, ZoomOut, Film } from "lucide-react";
+import { AspectRatio, BrandKit, TimelineItem, TimelineTrack, Project, MediaItem, TrackType } from "../types";
 
+/**
+ * Phone editor (< 768px). Preview on top, a real multi-track timeline below, a compact tool strip
+ * and bottom sheets. Clips are moved and trimmed with pointer events (touch, pen and mouse):
+ * tap a clip to select it, then drag it or its edge handles. Swiping empty lanes scrolls the timeline.
+ */
 interface MobileEditorViewProps {
   aspectRatio: AspectRatio;
   onSetAspectRatio: (ratio: AspectRatio) => void;
-  brandKit: BrandKit;
+  brandKit?: BrandKit;
   tracks: TimelineTrack[];
   items: TimelineItem[];
   onUpdateItems: (items: TimelineItem[]) => void;
+  onUpdateTracks?: (tracks: TimelineTrack[]) => void;
   onOpenExportModal: () => void;
   activeProject?: Project | null;
-  saveStatus?: "saving" | "saved" | "idle";
   mediaLibrary?: MediaItem[];
   onMediaUploaded?: (items: MediaItem[]) => void;
-  onUpdateProjectName?: (newName: string) => void;
 }
 
-type ActiveBottomSheet =
-  | null
-  | "add_media"
-  | "trim"
-  | "text"
-  | "captions"
-  | "audio"
-  | "speed"
-  | "effects";
+type Sheet = null | "add" | "text" | "speed" | "volume";
+type DragMode = "move" | "trimL" | "trimR";
 
-// Preset visual filters that can be applied directly to video preview
-const VISUAL_EFFECTS: { id: string; label: string; filterStyle: string; tag: string }[] = [
-  { id: "none", label: "Original (None)", filterStyle: "none", tag: "RAW" },
-  {
-    id: "cinematic_warm",
-    label: "Cinematic Warm",
-    filterStyle: "sepia(0.2) saturate(1.25) contrast(1.08)",
-    tag: "WARM",
-  },
-  {
-    id: "cyber_neon",
-    label: "Cyber Neon Pop",
-    filterStyle: "hue-rotate(185deg) saturate(1.4) contrast(1.15)",
-    tag: "NEON",
-  },
-  {
-    id: "noir_bw",
-    label: "Noir Monochrome",
-    filterStyle: "grayscale(1) contrast(1.25) brightness(0.95)",
-    tag: "B&W",
-  },
-  {
-    id: "vintage_film",
-    label: "Vintage Sepia",
-    filterStyle: "sepia(0.5) contrast(0.95) brightness(1.02)",
-    tag: "FILM",
-  },
-  {
-    id: "high_contrast",
-    label: "Vivid Contrast",
-    filterStyle: "contrast(1.35) saturate(1.2) brightness(1.04)",
-    tag: "VIVID",
-  },
-];
+const LANE_H = 52; // lane height (clip 48px + gaps)
+const CLIP_H = 48;
+const HANDLE_HIT = 44; // touch area of a trim handle, centred on the clip edge
+const PAD_X = 24;
+const VISUAL: TrackType[] = ["video", "broll", "image", "overlay", "compound"];
+const AUDIO: TrackType[] = ["voice", "music", "sfx"];
+const TEXT: TrackType[] = ["text", "captions"];
+const RATIOS: AspectRatio[] = ["9:16", "1:1", "16:9"];
+
+const fmt = (sec: number) => {
+  const s = Math.max(0, sec);
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${Math.floor((s % 1) * 10)}`;
+};
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const kindOf = (t: TrackType) => (TEXT.includes(t) ? "text" : AUDIO.includes(t) ? "audio" : "visual");
 
 export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   aspectRatio,
   onSetAspectRatio,
-  brandKit,
   tracks,
   items,
   onUpdateItems,
+  onUpdateTracks,
   onOpenExportModal,
   activeProject,
-  saveStatus = "saved",
   mediaLibrary = [],
   onMediaUploaded,
-  onUpdateProjectName,
 }) => {
-  const [playheadTime, setPlayheadTime] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(items[0]?.id || null);
-  const [activeSheet, setActiveSheet] = useState<ActiveBottomSheet>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
-
-  const [lastSavedTimeStr, setLastSavedTimeStr] = useState<string>(() => {
-    const d = new Date();
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  });
-
-  useEffect(() => {
-    if (saveStatus === "saved") {
-      const d = new Date();
-      setLastSavedTimeStr(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`);
-    }
-  }, [saveStatus]);
-
-  // Editable Project Title
-  const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
-  const [projectTitle, setProjectTitle] = useState<string>(
-    activeProject?.name || "Untitled Mobile Reel"
-  );
-
-  // Timeline Zoom Level (0.6x to 2.5x)
-  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-  const touchStartDistanceRef = useRef<number | null>(null);
-  const initialZoomRef = useRef<number>(1.0);
-
-  // History stack for Undo / Redo
+  const [playhead, setPlayhead] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [textDraft, setTextDraft] = useState("");
+  const pendingTextId = useRef<string | null>(null); // a just-added text clip, dropped if closed empty
   const [history, setHistory] = useState<TimelineItem[][]>([items]);
-  const [historyIndex, setHistoryIndex] = useState<number>(0);
+  const [hIndex, setHIndex] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const timelineContainerRef = useRef<HTMLDivElement>(null);
-  const mediaFileInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const audioFileRef = useRef<HTMLInputElement>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
-  // Show auto-dismissing toast
+  const pps = 40 * zoom; // pixels per second
+  const totalDuration = Math.max(0, ...items.map((it) => it.startTime + it.duration));
+  const timelineSeconds = Math.max(15, Math.ceil(totalDuration + 5));
+  const selected = items.find((it) => it.id === selectedId) || null;
+
   const showToast = (msg: string) => {
-    setToastMsg(msg);
-    setTimeout(() => {
-      setToastMsg((prev) => (prev === msg ? null : prev));
-    }, 2400);
+    setToast(msg);
+    window.setTimeout(() => setToast((m) => (m === msg ? null : m)), 2200);
   };
 
-  // Total duration calculation
-  const totalDuration = Math.max(
-    10,
-    Math.ceil(items.reduce((max, it) => Math.max(max, it.startTime + it.duration), 0))
+  // ---------- History ----------
+  const commit = (next: TimelineItem[]) => {
+    onUpdateItems(next);
+    const h = history.slice(0, hIndex + 1);
+    h.push(next);
+    setHistory(h.slice(-60));
+    setHIndex(Math.min(h.length, 60) - 1);
+  };
+  const undo = () => { if (hIndex > 0) { onUpdateItems(history[hIndex - 1]); setHIndex(hIndex - 1); } };
+  const redo = () => { if (hIndex < history.length - 1) { onUpdateItems(history[hIndex + 1]); setHIndex(hIndex + 1); } };
+
+  // ---------- Lanes (one per track that has clips; always one video lane) ----------
+  const lanes = useMemo(() => {
+    const usable = tracks.filter((t) => !t.isBusTrack && t.type !== "master_bus" && t.type !== "fx_return");
+    const used = new Set(items.map((it) => it.trackId));
+    const list = usable.filter((t) => used.has(t.id));
+    if (!list.some((t) => VISUAL.includes(t.type))) {
+      const v = usable.find((t) => VISUAL.includes(t.type));
+      if (v) list.unshift(v);
+    }
+    // Clips whose track no longer exists get a lane of their own so they stay editable.
+    const known = new Set(usable.map((t) => t.id));
+    const orphanIds = Array.from(new Set(items.filter((it) => !known.has(it.trackId)).map((it) => it.trackId)));
+    const orphans = orphanIds.map((id) => {
+      const first = items.find((it) => it.trackId === id)!;
+      return { id, name: id, type: first.type, muted: false, locked: false, color: "#64748b", height: LANE_H } as TimelineTrack;
+    });
+    const order = (t: TimelineTrack) => (kindOf(t.type) === "text" ? 0 : kindOf(t.type) === "visual" ? 1 : 2);
+    return [...list, ...orphans].sort((a, b) => order(a) - order(b));
+  }, [tracks, items]);
+
+  const trackFor = (kind: "visual" | "audio" | "text"): string => {
+    const t = tracks.find((tr) => !tr.isBusTrack && kindOf(tr.type) === kind && (kind !== "audio" || tr.type === "music" || tr.type === "voice"));
+    if (t) return t.id;
+    const id = kind === "text" ? "track_text" : kind === "audio" ? "track_music" : "track_video";
+    if (onUpdateTracks && !tracks.some((tr) => tr.id === id)) {
+      const type: TrackType = kind === "text" ? "text" : kind === "audio" ? "music" : "video";
+      onUpdateTracks([...tracks, { id, name: kind === "text" ? "Text" : kind === "audio" ? "Music" : "Video", type, muted: false, locked: false, color: "#3b82f6", height: LANE_H }]);
+    }
+    return id;
+  };
+
+  // ---------- Preview ----------
+  const visualAt = (t: number) =>
+    items
+      .filter((it) => VISUAL.includes(it.type) && !it.hidden && t >= it.startTime && t < it.startTime + it.duration && it.sourceUrl)
+      .sort((a, b) => lanes.findIndex((l) => l.id === a.trackId) - lanes.findIndex((l) => l.id === b.trackId))[0] || null;
+  const active = visualAt(playhead);
+  const activeTexts = items.filter((it) => TEXT.includes(it.type) && it.text && playhead >= it.startTime && playhead < it.startTime + it.duration);
+  const isImage = active && (active.type === "image" || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(active.sourceUrl || ""));
+  const sourceTime = (it: TimelineItem, t: number) => (it.sourceStartTime || 0) + (t - it.startTime) * (it.speed || 1);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !active || isImage) return;
+    const want = sourceTime(active, playhead);
+    if (Math.abs(v.currentTime - want) > 0.35) { try { v.currentTime = want; } catch {} }
+    v.playbackRate = active.speed || 1;
+    v.volume = Math.max(0, Math.min(1, (active.volume ?? 100) / 100));
+    if (playing && v.paused) v.play().catch(() => {});
+    if (!playing && !v.paused) v.pause();
+  }, [active?.id, active?.sourceUrl, playhead, playing]);
+
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setPlayhead((p) => {
+        const n = p + dt;
+        if (n >= totalDuration) { setPlaying(false); return totalDuration; }
+        return n;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, totalDuration]);
+
+  // Keep the playhead visible while playing.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !playing) return;
+    const x = PAD_X + playhead * pps;
+    if (x < el.scrollLeft + 24 || x > el.scrollLeft + el.clientWidth - 48) el.scrollLeft = Math.max(0, x - el.clientWidth / 3);
+  }, [playhead, playing, pps]);
+
+  const togglePlay = () => {
+    if (!items.length) return;
+    if (!playing && playhead >= totalDuration - 0.05) setPlayhead(0);
+    setPlaying((p) => !p);
+  };
+
+  // ---------- Seeking on the ruler ----------
+  const seekFromEvent = (e: React.PointerEvent) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = e.clientX - rect.left + el.scrollLeft - PAD_X;
+    setPlayhead(Math.max(0, Math.min(timelineSeconds, x / pps)));
+  };
+
+  // ---------- Drag / trim with pointer events ----------
+  const drag = useRef<null | { id: string; mode: DragMode; x0: number; orig: TimelineItem; moved: boolean; last: TimelineItem[] | null }>(null);
+
+  const snapPoints = (excludeId: string) => {
+    const pts = [0, playhead];
+    for (const it of itemsRef.current) if (it.id !== excludeId) pts.push(it.startTime, it.startTime + it.duration);
+    return pts;
+  };
+  const snap = (t: number, pts: number[]) => {
+    const tol = 10 / pps;
+    let best = t, dist = tol;
+    for (const p of pts) if (Math.abs(p - t) < dist) { best = p; dist = Math.abs(p - t); }
+    return best;
+  };
+
+  const onClipPointerDown = (e: React.PointerEvent, it: TimelineItem, mode: DragMode) => {
+    // An unselected clip isn't dragged: a tap selects it and a swipe scrolls the timeline.
+    if (it.id !== selectedId) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try { (e.currentTarget as Element).setPointerCapture(e.pointerId); } catch {}
+    drag.current = { id: it.id, mode, x0: e.clientX, orig: { ...it }, moved: false, last: null };
+  };
+
+  const onClipPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x0;
+    if (!d.moved && Math.abs(dx) < 4) return;
+    d.moved = true;
+    const dt = dx / pps;
+    const o = d.orig;
+    const pts = snapPoints(o.id);
+    const speed = o.speed || 1;
+    const isMedia = !TEXT.includes(o.type) && o.type !== "image";
+    let next: Partial<TimelineItem> = {};
+    if (d.mode === "move") {
+      let start = Math.max(0, o.startTime + dt);
+      const sStart = snap(start, pts);
+      const sEnd = snap(start + o.duration, pts);
+      if (sStart !== start) start = sStart; else if (sEnd !== start + o.duration) start = sEnd - o.duration;
+      next = { startTime: round2(Math.max(0, start)) };
+    } else if (d.mode === "trimL") {
+      let start = snap(o.startTime + dt, pts);
+      start = Math.max(0, Math.min(start, o.startTime + o.duration - 0.3));
+      if (isMedia) start = Math.max(start, o.startTime - (o.sourceStartTime || 0) / speed);
+      const delta = start - o.startTime;
+      next = { startTime: round2(start), duration: round2(o.duration - delta), sourceStartTime: isMedia ? round2((o.sourceStartTime || 0) + delta * speed) : o.sourceStartTime };
+    } else {
+      let end = snap(o.startTime + o.duration + dt, pts);
+      end = Math.max(o.startTime + 0.3, end);
+      const srcLen = Number((o as any).sourceDuration || (o as any).mediaDuration || 0);
+      if (isMedia && srcLen > 0) end = Math.min(end, o.startTime + (srcLen - (o.sourceStartTime || 0)) / speed);
+      next = { duration: round2(end - o.startTime) };
+    }
+    const updated = itemsRef.current.map((x) => (x.id === o.id ? { ...x, ...next } : x));
+    d.last = updated;
+    onUpdateItems(updated);
+  };
+
+  const onClipPointerUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.moved && d.last) commit(d.last);
+  };
+
+  // ---------- Tools ----------
+  const addFile = (file: File) => {
+    const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg)$/i.test(file.name);
+    const isImg = file.type.startsWith("image/");
+    const url = URL.createObjectURL(file);
+    const finish = (dur: number) => {
+      const kind = isAudio ? "audio" : "visual";
+      const trackId = trackFor(kind);
+      const laneEnd = Math.max(0, ...itemsRef.current.filter((x) => x.trackId === trackId).map((x) => x.startTime + x.duration));
+      const it: TimelineItem = {
+        id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        trackId, name: file.name, type: isAudio ? "music" : isImg ? "image" : "video",
+        startTime: round2(isAudio ? playhead : laneEnd), duration: round2(dur), sourceStartTime: 0, sourceUrl: url,
+        volume: 100, speed: 1, ...(isImg ? {} : { sourceDuration: dur }),
+      } as TimelineItem;
+      commit([...itemsRef.current, it]);
+      setSelectedId(it.id);
+      setSheet(null);
+      onMediaUploaded?.([{ id: `media_${Date.now()}`, name: file.name, type: isAudio ? "audio" : isImg ? "image" : "video", size: `${(file.size / 1048576).toFixed(1)} MB`, duration: dur, url, uploadedAt: "Just now" } as MediaItem]);
+    };
+    if (isImg) return finish(5);
+    const probe = document.createElement(isAudio ? "audio" : "video");
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => finish(Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5);
+    probe.onerror = () => showToast("This file can't be played in the browser.");
+    probe.src = url;
+  };
+
+  const addFromLibrary = (m: MediaItem) => {
+    const isAudio = m.type === "audio";
+    const trackId = trackFor(isAudio ? "audio" : "visual");
+    const laneEnd = Math.max(0, ...items.filter((x) => x.trackId === trackId).map((x) => x.startTime + x.duration));
+    const dur = Number(m.duration) || 5;
+    const it = {
+      id: `item_${Date.now()}`, trackId, name: m.name, type: isAudio ? "music" : m.type === "image" ? "image" : "video",
+      startTime: round2(isAudio ? playhead : laneEnd), duration: dur, sourceStartTime: 0, sourceUrl: m.url, volume: 100, speed: 1, sourceDuration: dur,
+    } as TimelineItem;
+    commit([...items, it]);
+    setSelectedId(it.id);
+    setSheet(null);
+  };
+
+  const addText = () => {
+    const trackId = trackFor("text");
+    const it: TimelineItem = { id: `item_text_${Date.now()}`, trackId, name: "Text", type: "text", startTime: round2(playhead), duration: 3, sourceStartTime: 0, text: "", color: "#ffffff" };
+    commit([...items, it]);
+    setSelectedId(it.id);
+    setTextDraft("");
+    pendingTextId.current = it.id;
+    setSheet("text");
+  };
+
+  const split = () => {
+    if (!selected) return showToast("Tap a clip first.");
+    const t = playhead;
+    if (t <= selected.startTime + 0.1 || t >= selected.startTime + selected.duration - 0.1) return showToast("Move the playhead inside the clip to split it.");
+    const first = { ...selected, duration: round2(t - selected.startTime) };
+    const second = {
+      ...selected, id: `${selected.id}_b${Date.now().toString(36)}`, startTime: round2(t), duration: round2(selected.startTime + selected.duration - t),
+      sourceStartTime: TEXT.includes(selected.type) ? selected.sourceStartTime : round2((selected.sourceStartTime || 0) + (t - selected.startTime) * (selected.speed || 1)),
+    };
+    commit(items.flatMap((x) => (x.id === selected.id ? [first, second] : [x])));
+    setSelectedId(second.id);
+  };
+
+  const remove = () => {
+    if (!selected) return;
+    commit(items.filter((x) => x.id !== selected.id));
+    setSelectedId(null);
+  };
+
+  const patchSelected = (p: Partial<TimelineItem>) => {
+    if (!selected) return;
+    commit(items.map((x) => (x.id === selected.id ? { ...x, ...p } : x)));
+  };
+
+  const closeSheet = () => {
+    const pid = pendingTextId.current;
+    pendingTextId.current = null;
+    setSheet(null);
+    if (pid) {
+      const it = itemsRef.current.find((x) => x.id === pid);
+      if (it && !it.text) {
+        commit(itemsRef.current.filter((x) => x.id !== pid));
+        setSelectedId(null);
+      }
+    }
+  };
+
+  const openTool = (s: Sheet) => {
+    if (s !== "add" && !selected) return showToast("Tap a clip first.");
+    if (s === "text" && selected && !TEXT.includes(selected.type)) return showToast("Select a text clip, or add one with Text.");
+    if (s === "text") setTextDraft(selected?.text || "");
+    setSheet(s);
+  };
+
+  const ratioIndex = Math.max(0, RATIOS.indexOf(aspectRatio));
+  const frameClass = aspectRatio === "9:16" ? "aspect-[9/16] h-full" : aspectRatio === "1:1" ? "aspect-square h-full" : "aspect-video w-full";
+  const laneColor = (t: TrackType) => (kindOf(t) === "text" ? "#10b981" : kindOf(t) === "audio" ? "#a855f7" : "#168CFF");
+
+  const ToolBtn = ({ icon: Icon, label, onClick, danger = false, disabled = false }: any) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex flex-col items-center justify-center min-w-[56px] h-[52px] rounded-xl text-xs font-semibold active:bg-white/10 disabled:opacity-35 ${danger ? "text-rose-400" : "text-gray-200"}`}
+    >
+      <Icon className="w-5 h-5 mb-0.5" />
+      {label}
+    </button>
   );
 
-  const selectedItem = items.find((it) => it.id === selectedItemId) || items[0] || null;
-
-  // Selected item editing temporary states for bottom sheets
-  const [trimStart, setTrimStart] = useState<number>(0);
-  const [trimDuration, setTrimDuration] = useState<number>(5);
-  const [textInput, setTextInput] = useState<string>("");
-  const [captionStyle, setCaptionStyle] = useState<string>("HORMOZI_YELLOW");
-  const [speedVal, setSpeedVal] = useState<number>(1.0);
-  const [volumeVal, setVolumeVal] = useState<number>(100);
-  const [activeFilterId, setActiveFilterId] = useState<string>("none");
-
-  // Sync state when selected item changes
-  useEffect(() => {
-    if (selectedItem) {
-      setTrimStart(selectedItem.startTime);
-      setTrimDuration(selectedItem.duration);
-      setTextInput(selectedItem.text || "");
-      setSpeedVal(selectedItem.speed || 1.0);
-      setVolumeVal(selectedItem.volume ?? 100);
-      // Retrieve filter if attached to item metadata
-      setActiveFilterId((selectedItem as any).filterId || "none");
-    }
-  }, [selectedItemId]);
-
-  // Keep active project name in sync if it changes externally
-  useEffect(() => {
-    if (activeProject?.name) {
-      setProjectTitle(activeProject.name);
-    }
-  }, [activeProject?.name]);
-
-  // Push new state to history
-  const commitItems = (newItems: TimelineItem[]) => {
-    onUpdateItems(newItems);
-    const nextHistory = history.slice(0, historyIndex + 1);
-    nextHistory.push(newItems);
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-  };
-
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      const nextIdx = historyIndex - 1;
-      setHistoryIndex(nextIdx);
-      onUpdateItems(history[nextIdx]);
-      showToast("Undone last edit");
-    }
-  };
-
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const nextIdx = historyIndex + 1;
-      setHistoryIndex(nextIdx);
-      onUpdateItems(history[nextIdx]);
-      showToast("Redone edit");
-    }
-  };
-
-  const handleManualSave = () => {
-    try {
-      localStorage.setItem("clipflow_editor_timeline_items", JSON.stringify(items));
-      localStorage.setItem("clipflow_editor_aspect_ratio", aspectRatio);
-      showToast("Project saved to local storage");
-    } catch {
-      showToast("Project saved to session memory");
-    }
-  };
-
-  // Video playback animation loop
-  useEffect(() => {
-    let animFrame: number;
-    if (isPlaying) {
-      const startTime = performance.now();
-      const initialPlayhead = playheadTime;
-
-      const loop = () => {
-        const elapsed = (performance.now() - startTime) / 1000;
-        const current = initialPlayhead + elapsed;
-        if (current >= totalDuration) {
-          setPlayheadTime(0);
-          setIsPlaying(false);
-          if (videoRef.current) videoRef.current.currentTime = 0;
-        } else {
-          setPlayheadTime(current);
-          animFrame = requestAnimationFrame(loop);
-        }
-      };
-      animFrame = requestAnimationFrame(loop);
-    }
-    return () => cancelAnimationFrame(animFrame);
-  }, [isPlaying, totalDuration]);
-
-  // Sync video element time
-  useEffect(() => {
-    if (videoRef.current && Math.abs(videoRef.current.currentTime - playheadTime) > 0.3) {
-      videoRef.current.currentTime = playheadTime;
-    }
-  }, [playheadTime]);
-
-  const togglePlayPause = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        videoRef.current.play().catch(() => {});
-        setIsPlaying(true);
-      }
-    } else {
-      setIsPlaying(!isPlaying);
-    }
-  };
-
-  // ----------------------------------------------------
-  // PINCH-TO-ZOOM TOUCH GESTURE ON TIMELINE
-  // ----------------------------------------------------
-  const handleTimelineTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      touchStartDistanceRef.current = dist;
-      initialZoomRef.current = zoomLevel;
-    }
-  };
-
-  const handleTimelineTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2 && touchStartDistanceRef.current !== null) {
-      const currentDist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const scale = currentDist / touchStartDistanceRef.current;
-      const newZoom = Math.min(2.5, Math.max(0.6, initialZoomRef.current * scale));
-      setZoomLevel(Number(newZoom.toFixed(2)));
-    }
-  };
-
-  const handleTimelineTouchEnd = () => {
-    touchStartDistanceRef.current = null;
-  };
-
-  // Zoom +/- buttons
-  const handleZoomIn = () => {
-    setZoomLevel((prev) => Math.min(2.5, Number((prev + 0.25).toFixed(2))));
-  };
-  const handleZoomOut = () => {
-    setZoomLevel((prev) => Math.max(0.6, Number((prev - 0.25).toFixed(2))));
-  };
-
-  // ----------------------------------------------------
-  // 1. ADD MEDIA (Invokes actual media picker)
-  // ----------------------------------------------------
-  const handleNativeFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const fileUrl = URL.createObjectURL(file);
-    const isVideo = file.type.startsWith("video");
-    const isAudio = file.type.startsWith("audio");
-    const newId = `clip_${Date.now()}`;
-    const startTime = playheadTime;
-    const dur = isAudio ? 15 : 6;
-
-    const newItem: TimelineItem = {
-      id: newId,
-      trackId: isAudio ? "track_music" : "track_video",
-      name: file.name,
-      type: isAudio ? "music" : "video",
-      startTime,
-      duration: dur,
-      sourceStartTime: 0,
-      sourceUrl: fileUrl,
-      volume: 100,
-      speed: 1.0,
-    };
-
-    const next = [...items, newItem];
-    commitItems(next);
-    setSelectedItemId(newId);
-    setActiveSheet(null);
-    showToast(`Added ${file.name} to timeline`);
-
-    if (onMediaUploaded) {
-      const mediaEntry: MediaItem = {
-        id: `media_${Date.now()}`,
-        name: file.name,
-        type: isAudio ? "audio" : "video",
-        size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-        duration: dur,
-        url: fileUrl,
-        uploadedAt: "Just now",
-      };
-      onMediaUploaded([mediaEntry]);
-    }
-  };
-
-  const handleAddFromLibrary = (asset: MediaItem) => {
-    const newId = `clip_${Date.now()}`;
-    const isAudio = asset.type === "audio";
-    const newItem: TimelineItem = {
-      id: newId,
-      trackId: isAudio ? "track_music" : "track_video",
-      name: asset.name,
-      type: isAudio ? "music" : "video",
-      startTime: playheadTime,
-      duration: asset.duration || 5,
-      sourceStartTime: 0,
-      sourceUrl: asset.url,
-      volume: 100,
-      speed: 1.0,
-    };
-
-    const next = [...items, newItem];
-    commitItems(next);
-    setSelectedItemId(newId);
-    setActiveSheet(null);
-    showToast(`Added ${asset.name} to timeline`);
-  };
-
-  const handleAddTextOverlay = () => {
-    const newId = `clip_${Date.now()}`;
-    const newItem: TimelineItem = {
-      id: newId,
-      trackId: "track_text",
-      name: "Kinetic Text Hook",
-      type: "text",
-      startTime: playheadTime,
-      duration: 4,
-      sourceStartTime: 0,
-      text: "HOOK: WATCH THIS TILL THE END",
-      volume: 100,
-      speed: 1.0,
-    };
-    const next = [...items, newItem];
-    commitItems(next);
-    setSelectedItemId(newId);
-    setActiveSheet(null);
-    showToast("Added kinetic text overlay");
-  };
-
-  const handleAddSoundtrack = () => {
-    const newId = `clip_${Date.now()}`;
-    const newItem: TimelineItem = {
-      id: newId,
-      trackId: "track_music",
-      name: "Lo-Fi_Hook_Beat.mp3",
-      type: "music",
-      startTime: playheadTime,
-      duration: 15,
-      sourceStartTime: 0,
-      volume: 60,
-      speed: 1.0,
-    };
-    const next = [...items, newItem];
-    commitItems(next);
-    setSelectedItemId(newId);
-    setActiveSheet(null);
-    showToast("Added background soundtrack");
-  };
-
-  // ----------------------------------------------------
-  // 2. SPLIT AT PLAYHEAD
-  // ----------------------------------------------------
-  const handleSplit = () => {
-    if (!selectedItem) {
-      showToast("Tap a clip to split it.");
-      return;
-    }
-    const itemStart = selectedItem.startTime;
-    const itemEnd = itemStart + selectedItem.duration;
-
-    let splitPoint = playheadTime;
-    if (playheadTime <= itemStart + 0.1 || playheadTime >= itemEnd - 0.1) {
-      splitPoint = Number((itemStart + selectedItem.duration / 2).toFixed(2));
-      setPlayheadTime(splitPoint);
-      if (videoRef.current) videoRef.current.currentTime = splitPoint;
-    }
-
-    const firstDuration = splitPoint - itemStart;
-    const secondDuration = itemEnd - splitPoint;
-
-    if (firstDuration < 0.3 || secondDuration < 0.3) {
-      showToast("Clip segment too short to split further.");
-      return;
-    }
-
-    const firstPart: TimelineItem = {
-      ...selectedItem,
-      duration: Number(firstDuration.toFixed(2)),
-    };
-
-    const secondPart: TimelineItem = {
-      ...selectedItem,
-      id: `clip_${Date.now()}_split`,
-      name: `${selectedItem.name} (Part 2)`,
-      startTime: Number(splitPoint.toFixed(2)),
-      duration: Number(secondDuration.toFixed(2)),
-      sourceStartTime: (selectedItem.sourceStartTime || 0) + firstDuration,
-    };
-
-    const next = items.map((it) => (it.id === selectedItem.id ? firstPart : it));
-    next.push(secondPart);
-    commitItems(next);
-    setSelectedItemId(secondPart.id);
-    showToast("Clip split into two segments");
-  };
-
-  // ----------------------------------------------------
-  // 3. DELETE CLIP
-  // ----------------------------------------------------
-  const handleDelete = () => {
-    if (!selectedItem) return;
-    if (items.length <= 1) {
-      showToast("Timeline must keep at least one clip.");
-      return;
-    }
-    const next = items.filter((it) => it.id !== selectedItem.id);
-    commitItems(next);
-    setSelectedItemId(next[0]?.id || null);
-    showToast("Clip removed from timeline");
-  };
-
-  // ----------------------------------------------------
-  // 4. APPLY TRIM
-  // ----------------------------------------------------
-  const handleApplyTrim = () => {
-    if (!selectedItem) return;
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            startTime: Number(trimStart.toFixed(2)),
-            duration: Math.max(0.5, Number(trimDuration.toFixed(2))),
-          }
-        : it
-    );
-    commitItems(next);
-    setActiveSheet(null);
-    showToast("Trim applied to clip");
-  };
-
-  // ----------------------------------------------------
-  // 5. APPLY TEXT OVERLAY
-  // ----------------------------------------------------
-  const handleApplyText = () => {
-    if (!selectedItem) return;
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            text: textInput,
-          }
-        : it
-    );
-    commitItems(next);
-    setActiveSheet(null);
-    showToast("Overlay text saved");
-  };
-
-  // ----------------------------------------------------
-  // 6. APPLY CAPTIONS
-  // ----------------------------------------------------
-  const handleApplyCaptions = (style: string) => {
-    if (!selectedItem) return;
-    setCaptionStyle(style);
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            text: textInput || "VIRAL KINETIC CAPTION",
-          }
-        : it
-    );
-    commitItems(next);
-    setActiveSheet(null);
-    showToast(`Captions set to ${style.replace("_", " ")}`);
-  };
-
-  // ----------------------------------------------------
-  // 7. APPLY SPEED
-  // ----------------------------------------------------
-  const handleApplySpeed = (s: number) => {
-    if (!selectedItem) return;
-    setSpeedVal(s);
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            speed: s,
-          }
-        : it
-    );
-    commitItems(next);
-    showToast(`Speed set to ${s}x`);
-  };
-
-  // ----------------------------------------------------
-  // 8. APPLY AUDIO VOLUME & MUTE
-  // ----------------------------------------------------
-  const handleApplyVolume = (v: number) => {
-    if (!selectedItem) return;
-    setVolumeVal(v);
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            volume: v,
-          }
-        : it
-    );
-    commitItems(next);
-    showToast(`Volume set to ${v}%`);
-  };
-
-  // ----------------------------------------------------
-  // 9. APPLY VISUAL EFFECTS / COLOR GRADE FILTER
-  // ----------------------------------------------------
-  const handleApplyEffect = (effId: string) => {
-    if (!selectedItem) return;
-    setActiveFilterId(effId);
-    const next = items.map((it) =>
-      it.id === selectedItem.id
-        ? {
-            ...it,
-            filterId: effId,
-          }
-        : it
-    );
-    commitItems(next);
-    const eff = VISUAL_EFFECTS.find((e) => e.id === effId);
-    showToast(`Applied ${eff?.label || "effect"}`);
-  };
-
-  // Active visual video clip under playhead
-  const activeVideoClip =
-    items.find(
-      (it) =>
-        (it.type === "video" || it.type === "broll") &&
-        playheadTime >= it.startTime &&
-        playheadTime <= it.startTime + it.duration
-    ) ||
-    selectedItem ||
-    items[0];
-
-  // Active text overlay under playhead
-  const activeText =
-    items.find(
-      (it) =>
-        (it.type === "text" || it.type === "captions") &&
-        playheadTime >= it.startTime &&
-        playheadTime <= it.startTime + it.duration
-    )?.text || (selectedItem?.type === "text" ? selectedItem.text : null);
-
-  // Active visual filter CSS
-  const activeFilterStyle =
-    VISUAL_EFFECTS.find((e) => e.id === activeFilterId)?.filterStyle || "none";
-
-  const formatTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  };
-
   return (
-    <div
-      id="mobile-timeline-editor"
-      className="flex-1 flex flex-col bg-[#07090E] text-[#F7F8FA] overflow-hidden select-none pb-[calc(env(safe-area-inset-bottom,0px)+64px)] relative"
-    >
-      {/* Hidden file input for native media picker */}
-      <input
-        ref={mediaFileInputRef}
-        type="file"
-        accept="video/*,image/*,audio/*"
-        onChange={handleNativeFileSelect}
-        className="hidden"
-      />
+    <div id="mobile-timeline-editor" className="flex-1 flex flex-col min-h-0 bg-[#07090E] text-[#F7F8FA] overflow-hidden select-none pb-[calc(env(safe-area-inset-bottom,0px)+64px)] relative">
+      <input ref={fileRef} type="file" accept="video/*,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) addFile(f); e.target.value = ""; }} />
+      <input ref={audioFileRef} type="file" accept="audio/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) addFile(f); e.target.value = ""; }} />
 
-      {/* Floating Auto-dismissing Toast Notification */}
-      {toastMsg && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-[#16D9F5] text-black font-bold text-xs px-3.5 py-1.5 rounded-full shadow-2xl flex items-center gap-1.5 animate-in fade-in duration-150">
-          <Info className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>{toastMsg}</span>
-        </div>
-      )}
+      {/* Top bar: title, undo/redo, ratio, export (one row, nothing overlaps) */}
+      <div className="h-12 px-2 flex items-center gap-1 border-b border-[#1C222E] bg-[#0C101A] flex-shrink-0">
+        <span className="flex-1 min-w-0 truncate text-sm font-bold px-1" title={activeProject?.name || "Untitled"}>
+          {activeProject?.name || "Untitled"}
+        </span>
+        <button type="button" onClick={undo} disabled={hIndex <= 0} aria-label="Undo" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-300 disabled:opacity-30 active:bg-white/10">
+          <Undo2 className="w-5 h-5" />
+        </button>
+        <button type="button" onClick={redo} disabled={hIndex >= history.length - 1} aria-label="Redo" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-300 disabled:opacity-30 active:bg-white/10">
+          <Redo2 className="w-5 h-5" />
+        </button>
+        <button type="button" onClick={() => onSetAspectRatio(RATIOS[(ratioIndex + 1) % RATIOS.length])} aria-label="Change aspect ratio" className="h-10 px-2.5 rounded-lg border border-[#272D3A] text-xs font-bold text-gray-200 active:bg-white/10">
+          {aspectRatio}
+        </button>
+        <button type="button" id="btn-mobile-export" onClick={onOpenExportModal} disabled={!items.length} className="h-10 px-3 rounded-lg btn-clipflow-primary text-sm font-bold flex items-center gap-1.5 disabled:opacity-40">
+          <Download className="w-4 h-4" /> Export
+        </button>
+      </div>
 
-      {/* ---------------------------------------------------- */}
-      {/* 1. COMPACT TOP BAR: Title, Save, Undo/Redo, Ratio, Export */}
-      {/* ---------------------------------------------------- */}
-      <div className="h-12 bg-[#0C101A] border-b border-[#1C222E] px-2.5 flex items-center justify-between z-20 flex-shrink-0">
-        {/* Left: Project Title & Save Status */}
-        <div className="flex items-center gap-1.5 min-w-0 max-w-[45%]">
-          {isEditingTitle ? (
-            <input
-              type="text"
-              value={projectTitle}
-              autoFocus
-              onBlur={() => {
-                setIsEditingTitle(false);
-                if (onUpdateProjectName) onUpdateProjectName(projectTitle);
-              }}
-              onChange={(e) => setProjectTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  setIsEditingTitle(false);
-                  if (onUpdateProjectName) onUpdateProjectName(projectTitle);
-                }
-              }}
-              className="bg-[#171E2D] border border-[#16D9F5] rounded px-1.5 py-0.5 text-xs text-white focus:outline-none w-28"
-            />
-          ) : (
-            <button
-              onClick={() => setIsEditingTitle(true)}
-              className="flex items-center gap-1 text-xs font-bold text-white hover:text-[#16D9F5] truncate text-left cursor-pointer min-h-[36px]"
-              title="Tap to rename project"
-            >
-              <span className="truncate max-w-[110px] sm:max-w-[150px]">{projectTitle}</span>
-              <Edit2 className="w-2.5 h-2.5 text-gray-500 flex-shrink-0" />
+      {/* Preview */}
+      <div className="flex-1 min-h-[180px] max-h-[40vh] bg-black flex items-center justify-center p-2 relative overflow-hidden">
+        {toast && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-[#16D9F5] text-black text-xs font-bold px-3 py-1.5 rounded-full shadow-xl whitespace-nowrap">{toast}</div>
+        )}
+        {items.length === 0 ? (
+          <div className="text-center space-y-2 px-6">
+            <Film className="w-8 h-8 text-gray-600 mx-auto" />
+            <p className="text-sm text-gray-300 font-semibold">Your timeline is empty</p>
+            <button type="button" onClick={() => setSheet("add")} className="h-11 px-4 rounded-xl btn-clipflow-primary text-sm font-bold inline-flex items-center gap-1.5">
+              <Plus className="w-4 h-4" /> Add a clip
             </button>
-          )}
-
-          {/* Save Status Chip */}
-          <button
-            onClick={handleManualSave}
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-semibold transition-all cursor-pointer flex-shrink-0 ${
-              saveStatus === "saving"
-                ? "text-[#16D9F5] bg-[#168CFF]/15 border-[#168CFF]/30"
-                : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
-            }`}
-            title={saveStatus === "saving" ? "Saving changes..." : `Last saved at ${lastSavedTimeStr}`}
-          >
-            {saveStatus === "saving" ? (
-              <RefreshCw className="w-2.5 h-2.5 animate-spin text-[#16D9F5]" />
-            ) : (
-              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+          </div>
+        ) : (
+          <div className={`relative max-h-full max-w-full rounded-lg overflow-hidden bg-[#0A0D14] flex items-center justify-center ${frameClass}`}>
+            {active && !isImage && (
+              <video key={active.sourceUrl} ref={videoRef} src={active.sourceUrl} playsInline preload="auto" className="w-full h-full object-cover" onClick={togglePlay} />
             )}
-            <span className="hidden sm:inline">
-              {saveStatus === "saving" ? "Saving..." : `Last saved at ${lastSavedTimeStr}`}
-            </span>
-          </button>
-        </div>
-
-        {/* Center: Aspect Ratio Toggles */}
-        <div className="flex items-center bg-[#141A26] rounded-lg p-0.5 border border-[#272D3A]">
-          {(["9:16", "1:1", "16:9"] as AspectRatio[]).map((r) => (
-            <button
-              key={r}
-              onClick={() => onSetAspectRatio(r)}
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] font-bold transition-all min-h-[30px] flex items-center justify-center ${
-                aspectRatio === r
-                  ? "bg-[#168CFF] text-white shadow-xs"
-                  : "text-gray-400 hover:text-white"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-
-        {/* Right: Undo/Redo & Export */}
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleUndo}
-            disabled={historyIndex <= 0}
-            className="p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-gray-300 disabled:opacity-30 hover:bg-white/10 active:scale-95 transition-all"
-            title="Undo"
-            aria-label="Undo last action"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={handleRedo}
-            disabled={historyIndex >= history.length - 1}
-            className="p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-gray-300 disabled:opacity-30 hover:bg-white/10 active:scale-95 transition-all"
-            title="Redo"
-            aria-label="Redo action"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
-
-          <button
-            id="btn-mobile-export"
-            onClick={onOpenExportModal}
-            className="btn-clipflow-primary px-2.5 sm:px-3 py-1 text-xs font-bold rounded-lg flex items-center gap-1 shadow-sm active:scale-95 transition-all min-h-[36px]"
-            title="Export Video"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span className="text-[11px]">Export</span>
-          </button>
-        </div>
-      </div>
-
-      {/* ---------------------------------------------------- */}
-      {/* 2. VIDEO PREVIEW CANVAS (Aspect-Correct & Playback) */}
-      {/* ---------------------------------------------------- */}
-      <div className="flex-1 min-h-[190px] max-h-[42vh] bg-black flex flex-col items-center justify-center p-2 relative overflow-hidden">
-        {/* Video Player Box with exact Aspect Ratio */}
-        <div
-          className={`relative max-h-full rounded-xl overflow-hidden bg-[#0A0D14] border border-[#272D3A] flex items-center justify-center shadow-2xl transition-all ${
-            aspectRatio === "9:16"
-              ? "aspect-[9/16] h-full"
-              : aspectRatio === "1:1"
-              ? "aspect-square h-full"
-              : "aspect-video w-full"
-          }`}
-        >
-          <video
-            ref={videoRef}
-            src={
-              activeVideoClip?.sourceUrl ||
-              activeProject?.sourceVideoUrl ||
-              ""
-            }
-            playsInline
-            muted={volumeVal === 0}
-            style={{ filter: activeFilterStyle }}
-            className="w-full h-full object-cover transition-all"
-            onClick={togglePlayPause}
-          />
-
-          {/* Active Filter Badge */}
-          {activeFilterId !== "none" && (
-            <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-[#16D9F5] text-[9px] font-mono border border-[#16D9F5]/40 backdrop-blur-xs">
-              FILTER: {VISUAL_EFFECTS.find((e) => e.id === activeFilterId)?.tag}
-            </div>
-          )}
-
-          {/* On-Screen Kinetic Text / Subtitle Overlay */}
-          {activeText && (
-            <div
-              className={`absolute inset-x-2 bottom-6 text-center pointer-events-none px-2.5 py-1 rounded-lg mx-auto w-fit max-w-[90%] shadow-xl backdrop-blur-xs ${
-                captionStyle === "HORMOZI_YELLOW"
-                  ? "bg-black/85 text-amber-300 font-black border border-amber-400/50"
-                  : captionStyle === "NEON_CYAN"
-                  ? "bg-black/85 text-[#16D9F5] font-black border border-[#16D9F5]/50"
-                  : captionStyle === "TIKTOK_BOLD"
-                  ? "bg-black/90 text-white font-extrabold stroke-black"
-                  : "bg-black/75 text-white font-bold"
-              }`}
-            >
-              <span className="text-xs sm:text-sm uppercase tracking-wide drop-shadow-md">
-                {activeText}
-              </span>
-            </div>
-          )}
-
-          {/* Center Play Button Overlay when paused */}
-          {!isPlaying && (
-            <button
-              onClick={togglePlayPause}
-              className="absolute w-12 h-12 rounded-full bg-black/60 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white shadow-xl active:scale-95 transition-transform cursor-pointer"
-              aria-label="Play video"
-            >
-              <Play className="w-5 h-5 ml-0.5 fill-white" />
-            </button>
-          )}
-        </div>
-
-        {/* Timecode & Active Clip Indicator Bar */}
-        <div className="w-full max-w-sm px-4 pt-1 flex items-center justify-between text-[11px] text-gray-400 font-mono">
-          <span className="text-[#16D9F5] font-bold">{formatTime(playheadTime)}</span>
-          <span className="text-[10px] text-gray-400 truncate max-w-[140px]">
-            {activeVideoClip?.name || "Timeline Clip"}
-          </span>
-          <span>{formatTime(totalDuration)}</span>
-        </div>
-      </div>
-
-      {/* ---------------------------------------------------- */}
-      {/* 3. TOUCH-FRIENDLY TIMELINE (Pinch Zoom & Scrubbing)  */}
-      {/* ---------------------------------------------------- */}
-      <div className="h-32 bg-[#0D111A] border-t border-b border-[#1C222E] flex flex-col justify-between p-2 flex-shrink-0 relative">
-        {/* Scrubber Bar & Zoom Controls */}
-        <div className="w-full flex items-center gap-2 mb-1">
-          {/* Play/Pause Button */}
-          <button
-            onClick={togglePlayPause}
-            className="w-8 h-8 rounded-lg bg-[#168CFF] hover:bg-[#168CFF]/90 text-white flex items-center justify-center flex-shrink-0 shadow active:scale-95 transition-transform"
-            aria-label={isPlaying ? "Pause" : "Play"}
-          >
-            {isPlaying ? (
-              <Pause className="w-4 h-4 fill-white" />
-            ) : (
-              <Play className="w-4 h-4 fill-white ml-0.5" />
-            )}
-          </button>
-
-          {/* Touch Scrubber Slider (44px touch target height wrapper) */}
-          <div className="flex-1 flex items-center h-8">
-            <input
-              type="range"
-              min={0}
-              max={totalDuration}
-              step={0.1}
-              value={playheadTime}
-              onChange={(e) => {
-                const val = Number(e.target.value);
-                setPlayheadTime(val);
-                if (videoRef.current) videoRef.current.currentTime = val;
-              }}
-              className="w-full accent-[#16D9F5] h-2 bg-[#1C2333] rounded-lg cursor-pointer"
-              aria-label="Timeline playhead scrubber"
-            />
-          </div>
-
-          {/* Zoom Level Indicator & Quick Zoom Controls */}
-          <div className="flex items-center gap-1 bg-[#141A26] rounded-lg p-0.5 border border-[#272D3A] flex-shrink-0">
-            <button
-              onClick={handleZoomOut}
-              className="w-6 h-6 rounded flex items-center justify-center text-gray-400 hover:text-white"
-              title="Zoom Out"
-              aria-label="Zoom out timeline"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[9px] font-mono px-1 text-[#16D9F5] font-bold">
-              {zoomLevel}x
-            </span>
-            <button
-              onClick={handleZoomIn}
-              className="w-6 h-6 rounded flex items-center justify-center text-gray-400 hover:text-white"
-              title="Zoom In"
-              aria-label="Zoom in timeline"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Touch Pinch-to-Zoom Clip Strip */}
-        <div
-          ref={timelineContainerRef}
-          onTouchStart={handleTimelineTouchStart}
-          onTouchMove={handleTimelineTouchMove}
-          onTouchEnd={handleTimelineTouchEnd}
-          className="flex-1 flex items-center gap-1.5 overflow-x-auto overflow-y-hidden py-1 px-1 scrollbar-none"
-        >
-          {items.map((it, idx) => {
-            const isSelected = it.id === selectedItemId;
-            const clipWidth = Math.max(80, it.duration * 16 * zoomLevel);
-            const isText = it.type === "text";
-            const isMusic = it.type === "music";
-
-            return (
-              <div
-                key={it.id}
-                onClick={() => {
-                  setSelectedItemId(it.id);
-                  setPlayheadTime(it.startTime);
-                  if (videoRef.current) videoRef.current.currentTime = it.startTime;
-                  showToast(`Selected clip: ${it.name}`);
-                }}
-                className={`flex-shrink-0 h-16 rounded-xl border p-1.5 flex flex-col justify-between cursor-pointer transition-all active:scale-[0.98] ${
-                  isSelected
-                    ? "bg-[#182132] border-[#16D9F5] ring-2 ring-[#16D9F5]/40 text-white"
-                    : "bg-[#111622] border-[#232A3B] text-gray-300 hover:border-gray-500"
-                }`}
-                style={{ width: `${clipWidth}px` }}
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] font-bold truncate max-w-[85px]">
-                    {idx + 1}. {it.name}
-                  </span>
-                  <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-black/40 text-[#16D9F5]">
-                    {it.duration.toFixed(1)}s
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-[9px] text-gray-400">
-                  <span
-                    className={`uppercase font-mono text-[8px] px-1 py-0.2 rounded ${
-                      isText
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : isMusic
-                        ? "bg-purple-500/20 text-purple-400"
-                        : "bg-[#168CFF]/20 text-[#16D9F5]"
-                    }`}
-                  >
-                    {it.type}
-                  </span>
-                  {it.speed && it.speed !== 1 && (
-                    <span className="text-amber-400 font-bold">{it.speed}x</span>
-                  )}
-                  {(it as any).filterId && (it as any).filterId !== "none" && (
-                    <span className="text-pink-400 text-[8px] font-mono">FX</span>
-                  )}
-                </div>
+            {active && isImage && <img src={active.sourceUrl} alt="" className="w-full h-full object-cover" />}
+            {!active && <span className="text-xs text-gray-500">No video at this point</span>}
+            {activeTexts.map((t) => (
+              <div key={t.id} className="absolute inset-x-3 bottom-8 text-center pointer-events-none">
+                <span className="inline-block px-2 py-1 rounded bg-black/70 text-sm font-extrabold uppercase" style={{ color: t.color || "#fff" }}>{t.text}</span>
               </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Selected Clip Ribbon */}
-      {selectedItem && (
-        <div className="flex items-center justify-between px-3 py-1 bg-[#121622] border-b border-[#1E2536] text-[11px] flex-shrink-0">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-[#16D9F5] animate-pulse" />
-            <span className="font-bold text-white truncate max-w-[170px]">{selectedItem.name}</span>
-            <span className="text-[10px] text-gray-400 font-mono">({selectedItem.duration.toFixed(1)}s)</span>
-          </div>
-          <span className="text-[10px] text-[#16D9F5] font-semibold">Clip Actions</span>
-        </div>
-      )}
-
-      {/* ---------------------------------------------------- */}
-      {/* 4. CONTEXT TOOL STRIP: Trim, Split, Speed, Audio, Captions, Text, Effects, Delete */}
-      {/* ---------------------------------------------------- */}
-      <div className="h-16 bg-[#0A0D15] px-2 flex items-center justify-start gap-1 overflow-x-auto scrollbar-none flex-shrink-0">
-        {/* Add Media (Must invoke actual media picker) */}
-        <button
-          onClick={() => setActiveSheet("add_media")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Add video, audio, or text"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#168CFF]/20 text-[#16D9F5] flex items-center justify-center mb-0.5">
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-          </div>
-          <span className="text-[10px] font-semibold">Add Media</span>
-        </button>
-
-        {/* Trim */}
-        <button
-          onClick={() => setActiveSheet("trim")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Trim clip duration"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Scissors className="w-4 h-4 text-amber-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Trim</span>
-        </button>
-
-        {/* Split */}
-        <button
-          onClick={handleSplit}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Split clip at playhead"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Split className="w-4 h-4 text-[#16D9F5]" />
-          </div>
-          <span className="text-[10px] font-semibold">Split</span>
-        </button>
-
-        {/* Speed */}
-        <button
-          onClick={() => setActiveSheet("speed")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Adjust clip speed"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Gauge className="w-4 h-4 text-cyan-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Speed</span>
-        </button>
-
-        {/* Audio */}
-        <button
-          onClick={() => setActiveSheet("audio")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Audio volume & levels"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Volume2 className="w-4 h-4 text-purple-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Audio</span>
-        </button>
-
-        {/* Captions */}
-        <button
-          onClick={() => setActiveSheet("captions")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Kinetic captions styles"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Subtitles className="w-4 h-4 text-pink-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Captions</span>
-        </button>
-
-        {/* Text */}
-        <button
-          onClick={() => setActiveSheet("text")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="On-screen text overlay"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Type className="w-4 h-4 text-emerald-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Text</span>
-        </button>
-
-        {/* Effects (Visual filters & color grading) */}
-        <button
-          onClick={() => setActiveSheet("effects")}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-gray-300 hover:text-white active:bg-white/10 transition-colors cursor-pointer"
-          title="Visual filters and color grading"
-        >
-          <div className="w-8 h-8 rounded-full bg-[#171E2D] border border-[#272D3A] flex items-center justify-center mb-0.5">
-            <Wand2 className="w-4 h-4 text-amber-300" />
-          </div>
-          <span className="text-[10px] font-semibold">Effects</span>
-        </button>
-
-        {/* Delete */}
-        <button
-          onClick={handleDelete}
-          className="flex flex-col items-center justify-center min-w-[54px] min-h-[44px] py-1 px-1.5 rounded-xl text-rose-400 hover:text-rose-300 active:bg-white/10 transition-colors cursor-pointer"
-          title="Delete selected clip"
-        >
-          <div className="w-8 h-8 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mb-0.5">
-            <Trash2 className="w-4 h-4 text-rose-400" />
-          </div>
-          <span className="text-[10px] font-semibold">Delete</span>
-        </button>
-      </div>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* 5. COMPACT BOTTOM SHEETS (Leaves Preview & Timeline visible above!) */}
-      {/* ------------------------------------------------------------------ */}
-
-      {/* SHEET A: ADD MEDIA (Invokes actual media picker) */}
-      {activeSheet === "add_media" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2.5 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between border-b border-[#1F2636] pb-2">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Plus className="w-3.5 h-3.5 text-[#16D9F5]" /> Add Media to Timeline
-            </span>
-            <button
-              onClick={() => setActiveSheet(null)}
-              className="p-1 rounded-lg text-gray-400 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            {/* 1. Invoke native device file / camera roll picker */}
-            <button
-              onClick={() => {
-                if (mediaFileInputRef.current) {
-                  mediaFileInputRef.current.click();
-                }
-              }}
-              className="p-2.5 rounded-xl bg-gradient-to-r from-[#168CFF]/15 to-[#16D9F5]/15 border border-[#168CFF]/40 text-left text-white flex items-center gap-2 active:scale-95 transition-all"
-            >
-              <Smartphone className="w-4 h-4 text-[#16D9F5] flex-shrink-0" />
-              <div>
-                <span className="font-bold block text-[11px] text-white">Choose from Phone</span>
-                <span className="text-[9px] text-[#16D9F5]">Camera roll & videos</span>
-              </div>
-            </button>
-
-            {/* 2. Text / Kinetic Hook Overlay */}
-            <button
-              onClick={handleAddTextOverlay}
-              className="p-2.5 rounded-xl bg-[#171E2D] hover:bg-[#202738] border border-[#272D3A] text-left text-white flex items-center gap-2 active:scale-95 transition-all"
-            >
-              <Type className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-              <div>
-                <span className="font-semibold block text-[11px]">Kinetic Text</span>
-                <span className="text-[9px] text-gray-400">Viral hook overlay</span>
-              </div>
-            </button>
-
-            {/* 3. Background Soundtrack */}
-            <button
-              onClick={handleAddSoundtrack}
-              className="p-2.5 rounded-xl bg-[#171E2D] hover:bg-[#202738] border border-[#272D3A] text-left text-white flex items-center gap-2 active:scale-95 transition-all"
-            >
-              <Music className="w-4 h-4 text-purple-400 flex-shrink-0" />
-              <div>
-                <span className="font-semibold block text-[11px]">Soundtrack</span>
-                <span className="text-[9px] text-gray-400">Audio / SFX track</span>
-              </div>
-            </button>
-
-          </div>
-
-          {/* Media Library assets if available */}
-          {mediaLibrary && mediaLibrary.length > 0 && (
-            <div className="pt-2 border-t border-[#1C2230]">
-              <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider block mb-1.5">
-                From Workspace Media Library ({mediaLibrary.length})
-              </span>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {mediaLibrary.slice(0, 5).map((asset) => (
-                  <button
-                    key={asset.id}
-                    onClick={() => handleAddFromLibrary(asset)}
-                    className="flex-shrink-0 p-2 rounded-lg bg-[#141A26] border border-[#232A3B] hover:border-[#16D9F5] text-left text-[10px] w-28 truncate"
-                  >
-                    <span className="font-semibold text-white block truncate">{asset.name}</span>
-                    <span className="text-gray-400 text-[9px]">Tap to insert</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* SHEET B: TRIM */}
-      {activeSheet === "trim" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold text-white">Trim: {selectedItem?.name}</span>
-              <span className="text-[10px] text-gray-400 block">Preview & timeline remain live above</span>
-            </div>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div>
-              <div className="flex justify-between text-[11px] text-gray-300 mb-0.5">
-                <span>Start Point</span>
-                <span className="font-mono text-[#16D9F5] font-bold">{trimStart.toFixed(1)}s</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(10, totalDuration)}
-                step={0.1}
-                value={trimStart}
-                onChange={(e) => setTrimStart(Number(e.target.value))}
-                className="w-full accent-[#16D9F5] h-2"
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between text-[11px] text-gray-300 mb-0.5">
-                <span>Duration</span>
-                <span className="font-mono text-[#16D9F5] font-bold">{trimDuration.toFixed(1)}s</span>
-              </div>
-              <input
-                type="range"
-                min={0.5}
-                max={30}
-                step={0.5}
-                value={trimDuration}
-                onChange={(e) => setTrimDuration(Number(e.target.value))}
-                className="w-full accent-[#16D9F5] h-2"
-              />
-            </div>
-
-            <button
-              onClick={handleApplyTrim}
-              className="w-full py-2.5 rounded-xl btn-clipflow-primary text-xs font-bold flex items-center justify-center gap-1.5 shadow min-h-[44px]"
-            >
-              <Check className="w-4 h-4" />
-              <span>Apply Trim to Clip</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SHEET C: TEXT */}
-      {activeSheet === "text" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-white">Edit On-Screen Text</span>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <input
-              type="text"
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              placeholder="Enter headline or hook text..."
-              className="w-full bg-[#171E2D] border border-[#272D3A] rounded-xl px-3 py-2 text-white focus:outline-none focus:border-[#16D9F5]"
-            />
-
-            <div className="flex flex-wrap gap-1.5">
-              {["VIRAL HOOK", "WATCH TILL THE END", "PRO TIP", "NEW DISCOVERY"].map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setTextInput(st)}
-                  className="px-2 py-1 rounded-lg bg-[#171E2D] border border-[#272D3A] text-[10px] text-gray-300 min-h-[32px]"
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={handleApplyText}
-              className="w-full py-2.5 rounded-xl btn-clipflow-primary text-xs font-bold flex items-center justify-center gap-1.5 shadow min-h-[44px]"
-            >
-              <Check className="w-4 h-4" />
-              <span>Save Text Overlay</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SHEET D: CAPTIONS */}
-      {activeSheet === "captions" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Subtitles className="w-4 h-4 text-pink-400" /> Kinetic Captions Style
-            </span>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="grid grid-cols-2 gap-1.5">
-              {[
-                { id: "HORMOZI_YELLOW", label: "Hormozi Yellow", color: "text-amber-300" },
-                { id: "NEON_CYAN", label: "Neon Cyan Pop", color: "text-[#16D9F5]" },
-                { id: "CLEAN_WHITE", label: "Minimal White", color: "text-white" },
-                { id: "TIKTOK_BOLD", label: "TikTok Bold Stroke", color: "text-pink-400" },
-              ].map((style) => (
-                <button
-                  key={style.id}
-                  onClick={() => handleApplyCaptions(style.id)}
-                  className={`p-2.5 rounded-xl border text-left font-bold text-[11px] min-h-[44px] flex items-center justify-between ${
-                    captionStyle === style.id
-                      ? "bg-[#168CFF]/20 border-[#16D9F5] text-white"
-                      : "bg-[#171E2D] border-[#272D3A] text-gray-300"
-                  }`}
-                >
-                  <span className={style.color}>{style.label}</span>
-                  {captionStyle === style.id && <Check className="w-3.5 h-3.5 text-[#16D9F5]" />}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setActiveSheet(null)}
-              className="w-full py-2.5 rounded-xl bg-[#171E2D] border border-[#272D3A] text-xs font-bold text-white min-h-[44px]"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SHEET E: AUDIO */}
-      {activeSheet === "audio" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Volume2 className="w-4 h-4 text-purple-400" /> Audio Volume & Balance
-            </span>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div>
-              <div className="flex justify-between text-[11px] text-gray-300 mb-1">
-                <span>Selected Track Volume</span>
-                <span className="font-mono text-[#16D9F5] font-bold">{volumeVal}%</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={volumeVal}
-                onChange={(e) => handleApplyVolume(Number(e.target.value))}
-                className="w-full accent-[#16D9F5] h-2"
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-1.5">
-              {[0, 25, 50, 75, 100].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => handleApplyVolume(v)}
-                  className={`flex-1 py-1.5 rounded-lg border text-xs font-bold min-h-[38px] ${
-                    volumeVal === v
-                      ? "bg-[#168CFF] text-white border-[#168CFF]"
-                      : "bg-[#171E2D] border-[#272D3A] text-gray-300"
-                  }`}
-                >
-                  {v === 0 ? "Mute" : `${v}%`}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setActiveSheet(null)}
-              className="w-full py-2.5 rounded-xl btn-clipflow-primary text-xs font-bold min-h-[44px]"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SHEET F: SPEED */}
-      {activeSheet === "speed" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Gauge className="w-4 h-4 text-cyan-400" /> Playback Speed
-            </span>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="grid grid-cols-5 gap-1.5">
-              {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].slice(0, 5).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => handleApplySpeed(s)}
-                  className={`py-2 rounded-xl border text-center font-bold text-xs min-h-[44px] flex items-center justify-center ${
-                    speedVal === s
-                      ? "bg-[#168CFF] text-white border-[#168CFF] shadow-xs"
-                      : "bg-[#171E2D] border-[#272D3A] text-gray-300"
-                  }`}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setActiveSheet(null)}
-              className="w-full py-2.5 rounded-xl btn-clipflow-primary text-xs font-bold mt-1 min-h-[44px]"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SHEET G: EFFECTS & COLOR GRADING */}
-      {activeSheet === "effects" && (
-        <div className="fixed inset-x-0 bottom-0 z-40 max-h-[38vh] bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl shadow-2xl p-3.5 space-y-2.5 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] animate-in slide-in-from-bottom duration-150 overflow-y-auto">
-          <div className="flex items-center justify-between border-b border-[#1F2636] pb-2">
-            <div className="flex items-center gap-1.5">
-              <Wand2 className="w-4 h-4 text-amber-300" />
-              <span className="text-xs font-bold text-white">Visual Filters & Effects</span>
-            </div>
-            <button onClick={() => setActiveSheet(null)} className="p-1 rounded-lg text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Visual Filters Grid */}
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            {VISUAL_EFFECTS.map((eff) => (
-              <button
-                key={eff.id}
-                onClick={() => handleApplyEffect(eff.id)}
-                className={`p-2 rounded-xl border text-left flex flex-col justify-between min-h-[48px] active:scale-95 transition-all ${
-                  activeFilterId === eff.id
-                    ? "bg-[#168CFF]/20 border-[#16D9F5] text-white ring-1 ring-[#16D9F5]"
-                    : "bg-[#141A26] border-[#232A3B] text-gray-300 hover:border-gray-500"
-                }`}
-              >
-                <span className="font-bold text-[11px] block truncate">{eff.label}</span>
-                <span className="text-[9px] font-mono text-[#16D9F5]">{eff.tag}</span>
-              </button>
             ))}
           </div>
+        )}
+      </div>
 
-          {/* Honest Explanation for Unimplemented Desktop 3D GPU Effects */}
-          <div className="p-2.5 rounded-xl bg-[#141A26] border border-[#272D3A] text-[10px] text-gray-400 space-y-1">
-            <div className="flex items-center gap-1 text-amber-400 font-semibold">
-              <Info className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Mobile Rendering Notice:</span>
-            </div>
-            <p className="leading-relaxed">
-              Real-time color grading and kinetic captions are live in preview. Complex 3D GPU transition shaders and multi-layer neural tracking require the desktop Timeline Studio.
-            </p>
+      {/* Transport */}
+      <div className="h-12 px-2 flex items-center gap-2 border-t border-[#1C222E] bg-[#0C101A] flex-shrink-0">
+        <button type="button" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"} disabled={!items.length} className="w-11 h-11 rounded-full bg-[#168CFF] text-white flex items-center justify-center disabled:opacity-40">
+          {playing ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white ml-0.5" />}
+        </button>
+        <span className="text-xs font-mono text-gray-300 flex-1">
+          <span className="text-[#16D9F5] font-bold">{fmt(playhead)}</span> / {fmt(totalDuration)}
+        </span>
+        <button type="button" onClick={() => setZoom((z) => Math.max(0.4, +(z / 1.4).toFixed(2)))} aria-label="Zoom out" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-300 active:bg-white/10"><ZoomOut className="w-5 h-5" /></button>
+        <button type="button" onClick={() => setZoom((z) => Math.min(4, +(z * 1.4).toFixed(2)))} aria-label="Zoom in" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-300 active:bg-white/10"><ZoomIn className="w-5 h-5" /></button>
+      </div>
+
+      {/* Timeline */}
+      <div ref={scrollRef} id="mobile-timeline-scroll" className="flex-shrink-0 overflow-x-auto overflow-y-auto bg-[#0D111A] border-y border-[#1C222E]" style={{ maxHeight: 36 + LANE_H * 3 + 8, touchAction: "pan-x pan-y" }}>
+        <div className="relative" style={{ width: PAD_X * 2 + timelineSeconds * pps }}>
+          {/* Ruler: tap or drag to move the playhead */}
+          <div
+            className="h-9 relative border-b border-[#1C222E] cursor-pointer"
+            style={{ touchAction: "none" }}
+            onPointerDown={(e) => { (e.currentTarget as Element).setPointerCapture(e.pointerId); setPlaying(false); seekFromEvent(e); }}
+            onPointerMove={(e) => { if (e.buttons || e.pointerType === "touch") seekFromEvent(e); }}
+            aria-label="Timeline ruler"
+          >
+            {Array.from({ length: timelineSeconds + 1 }).map((_, s) => {
+              const step = pps < 24 ? 5 : pps < 50 ? 2 : 1;
+              if (s % step) return null;
+              return (
+                <span key={s} className="absolute top-0 h-full border-l border-[#273044] text-xs text-gray-500 pl-1 pt-1" style={{ left: PAD_X + s * pps }}>{s}s</span>
+              );
+            })}
           </div>
 
-          <button
-            onClick={() => setActiveSheet(null)}
-            className="w-full py-2.5 rounded-xl btn-clipflow-primary text-xs font-bold min-h-[44px]"
-          >
-            Apply Effect
-          </button>
+          {/* Lanes */}
+          {lanes.length === 0 && (
+            <div className="h-[52px] flex items-center px-6 text-xs text-gray-500">Add a clip to start editing.</div>
+          )}
+          {lanes.map((lane) => (
+            <div key={lane.id} className="relative border-b border-[#161B27]" style={{ height: LANE_H }} onClick={() => setSelectedId(null)}>
+              {items.filter((it) => it.trackId === lane.id).map((it) => {
+                const sel = it.id === selectedId;
+                const left = PAD_X + it.startTime * pps;
+                const width = Math.max(8, it.duration * pps);
+                const color = laneColor(it.type);
+                return (
+                  <div
+                    key={it.id}
+                    data-clip-id={it.id}
+                    className={`absolute rounded-lg flex items-center overflow-visible ${sel ? "ring-2 ring-white z-10" : ""}`}
+                    style={{ left, width, top: (LANE_H - CLIP_H) / 2, height: CLIP_H, background: `${color}33`, border: `1px solid ${color}`, touchAction: sel ? "none" : "pan-x pan-y" }}
+                    onClick={(e) => { e.stopPropagation(); if (!drag.current) setSelectedId(it.id); }}
+                    onPointerDown={(e) => onClipPointerDown(e, it, "move")}
+                    onPointerMove={onClipPointerMove}
+                    onPointerUp={onClipPointerUp}
+                    onPointerCancel={onClipPointerUp}
+                  >
+                    <span className="px-2 text-xs font-semibold truncate text-white pointer-events-none">
+                      {TEXT.includes(it.type) ? it.text || "Text" : it.name}
+                    </span>
+                    {sel && (["trimL", "trimR"] as DragMode[]).map((m) => (
+                      <div
+                        key={m}
+                        role="slider"
+                        aria-label={m === "trimL" ? "Trim start" : "Trim end"}
+                        className="absolute top-0 flex items-center justify-center"
+                        style={{ width: HANDLE_HIT, height: CLIP_H, [m === "trimL" ? "left" : "right"]: -HANDLE_HIT / 2, touchAction: "none", zIndex: 20 }}
+                        onPointerDown={(e) => onClipPointerDown(e, it, m)}
+                        onPointerMove={onClipPointerMove}
+                        onPointerUp={onClipPointerUp}
+                        onPointerCancel={onClipPointerUp}
+                      >
+                        <span className="w-3 h-9 rounded bg-white shadow" />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          {/* Playhead */}
+          <div className="absolute top-0 bottom-0 w-0.5 bg-[#FF2D6F] pointer-events-none z-20" style={{ left: PAD_X + playhead * pps }} />
+        </div>
+      </div>
+      <p className="px-3 py-1 text-xs text-gray-500 flex-shrink-0">
+        {selected ? "Drag the clip to move it, or drag its white handles to trim." : "Tap a clip to select it."}
+      </p>
+
+      {/* Tools */}
+      <div className="h-14 px-1 flex items-center gap-0.5 overflow-x-auto flex-shrink-0 bg-[#0A0D15]">
+        <ToolBtn icon={Plus} label="Add" onClick={() => openTool("add")} />
+        <ToolBtn icon={Split} label="Split" onClick={split} disabled={!selected} />
+        <ToolBtn icon={Type} label="Text" onClick={() => (selected && TEXT.includes(selected.type) ? openTool("text") : addText())} />
+        <ToolBtn icon={Gauge} label="Speed" onClick={() => openTool("speed")} disabled={!selected || TEXT.includes(selected.type)} />
+        <ToolBtn icon={Volume2} label="Volume" onClick={() => openTool("volume")} disabled={!selected || TEXT.includes(selected.type) || selected.type === "image"} />
+        <ToolBtn icon={Trash2} label="Delete" onClick={remove} danger disabled={!selected} />
+      </div>
+
+      {/* Bottom sheets */}
+      {sheet && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex flex-col justify-end" onClick={closeSheet}>
+          <div className="bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl p-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 max-h-[60vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold">
+                {sheet === "add" ? "Add to timeline" : sheet === "text" ? "Text" : sheet === "speed" ? "Speed" : "Volume"}
+              </span>
+              <button type="button" onClick={closeSheet} aria-label="Close" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-400 active:bg-white/10"><X className="w-5 h-5" /></button>
+            </div>
+
+            {sheet === "add" && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => fileRef.current?.click()} className="h-12 rounded-xl border border-[#168CFF]/50 bg-[#168CFF]/10 text-sm font-semibold flex items-center justify-center gap-2"><Smartphone className="w-4 h-4" /> Video or photo</button>
+                  <button type="button" onClick={() => audioFileRef.current?.click()} className="h-12 rounded-xl border border-[#272D3A] bg-[#171E2D] text-sm font-semibold flex items-center justify-center gap-2"><Volume2 className="w-4 h-4" /> Audio</button>
+                </div>
+                {mediaLibrary.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-gray-400 font-semibold">From your library</p>
+                    {mediaLibrary.slice(0, 8).map((m) => (
+                      <button key={m.id} type="button" onClick={() => addFromLibrary(m)} className="w-full h-11 px-3 rounded-lg bg-[#141A26] border border-[#232A3B] text-left text-sm truncate">{m.name}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {sheet === "text" && selected && (
+              <div className="space-y-3">
+                <input
+                  autoFocus
+                  value={textDraft}
+                  onChange={(e) => setTextDraft(e.target.value)}
+                  placeholder="Type your text"
+                  className="w-full h-12 bg-[#171E2D] border border-[#272D3A] rounded-xl px-3 text-base focus:outline-none focus:border-[#16D9F5]"
+                />
+                <button type="button" onClick={() => {
+                  if (!textDraft.trim()) return closeSheet();
+                  pendingTextId.current = null;
+                  patchSelected({ text: textDraft, name: textDraft.slice(0, 40) });
+                  setSheet(null);
+                }} className="w-full h-12 rounded-xl btn-clipflow-primary text-sm font-bold">Save text</button>
+              </div>
+            )}
+
+            {sheet === "speed" && selected && (
+              <div className="grid grid-cols-5 gap-2">
+                {[0.5, 0.75, 1, 1.5, 2].map((s) => (
+                  <button key={s} type="button" onClick={() => {
+                    // Keep the same source range: the clip gets shorter when faster.
+                    const old = selected.speed || 1;
+                    patchSelected({ speed: s, duration: round2((selected.duration * old) / s) });
+                  }} className={`h-12 rounded-xl border text-sm font-bold ${(selected.speed || 1) === s ? "bg-[#168CFF] border-[#168CFF]" : "bg-[#171E2D] border-[#272D3A] text-gray-300"}`}>{s}x</button>
+                ))}
+              </div>
+            )}
+
+            {sheet === "volume" && selected && (
+              <div className="grid grid-cols-5 gap-2">
+                {[0, 25, 50, 75, 100].map((v) => (
+                  <button key={v} type="button" onClick={() => patchSelected({ volume: v })} className={`h-12 rounded-xl border text-sm font-bold ${(selected.volume ?? 100) === v ? "bg-[#168CFF] border-[#168CFF]" : "bg-[#171E2D] border-[#272D3A] text-gray-300"}`}>{v === 0 ? "Mute" : `${v}%`}</button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
