@@ -170,8 +170,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const [shots, setShots] = useState<StoryboardShot[]>([]);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [costEstimate, setCostEstimate] = useState<number>(1.5);
-  // "stock" = free Pexels stock footage (default); "veo" = Veo Lite AI footage (credits); "preview" = free text cards.
-  const [renderMode, setRenderMode] = useState<"stock" | "veo" | "preview">("stock");
+  // "stock" = free Pexels stock footage (default); "veo" = Veo Lite / "runninghub" = RunningHub AI footage (credits); "preview" = free text cards.
+  const [renderMode, setRenderMode] = useState<"stock" | "veo" | "runninghub" | "preview">("stock");
+  const [rhConfig, setRhConfig] = useState<{ configured: boolean; notConfiguredReason?: string; creditsPerSecond: number; creditsPerJob: number; minSeconds: number; maxSeconds: number; imageToVideo?: boolean } | null>(null);
   const [stockNotice, setStockNotice] = useState<string | null>(null);
   const [veoConfig, setVeoConfig] = useState<{ available: boolean; creditsPerSecond: number; allowedDurations: number[] } | null>(null);
   const [shotJobStatus, setShotJobStatus] = useState<Record<string, string>>({});
@@ -482,7 +483,21 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
   const veoCreditsForShots = (list: StoryboardShot[]) =>
     list.reduce((sum, s) => sum + veoSecondsFor(s.duration) * (veoConfig?.creditsPerSecond || 1), 0);
 
+  // RunningHub: clip length is the scene length within its 4-15s range; billed per second or per job.
+  const rhSecondsFor = (d: number) => Math.min(rhConfig?.maxSeconds || 15, Math.max(rhConfig?.minSeconds || 4, Math.ceil(d || 5)));
+  const rhCreditsFor = (d: number) =>
+    rhConfig?.creditsPerJob ? Math.ceil(rhConfig.creditsPerJob) : Math.ceil(rhSecondsFor(d) * (rhConfig?.creditsPerSecond || 2));
+  const aiCreditsForShots = (list: StoryboardShot[]) =>
+    renderMode === "runninghub" ? list.reduce((sum, s) => sum + rhCreditsFor(s.duration), 0) : veoCreditsForShots(list);
+
   useEffect(() => {
+    fetch("/api/video/providers")
+      .then((r) => r.json())
+      .then((d) => {
+        const rh = d.success && (d.providers || []).find((p: any) => p.id === "runninghub");
+        if (rh) setRhConfig(rh);
+      })
+      .catch(() => {});
     fetch("/api/ai/veo/config")
       .then((r) => r.json())
       .then((d) => {
@@ -493,29 +508,31 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
       .catch(() => {});
   }, []);
 
-  // Submit a Veo job for one shot (server de-duplicates by shot + prompt) and poll until done.
-  const renderShotWithVeo = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string }> => {
+  // Submit an AI video job for one shot through the provider-independent API (server
+  // de-duplicates by shot + prompt) and poll until it's done.
+  const renderShotWithAI = async (shot: StoryboardShot, provider: "veo" | "runninghub"): Promise<{ videoUrl: string; thumbnailUrl?: string }> => {
     const key = [shot.prompt, shot.duration, aspectRatio, tone].join("|");
-    const res = await fetch("/api/ai/veo/shots", {
+    const res = await fetch("/api/video/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shot, aspectRatio, style: tone, idempotencyKey: key }),
+      body: JSON.stringify({ provider, shot, aspectRatio, style: tone, idempotencyKey: key }),
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || "Couldn't start the AI video job");
     const jobId = data.job.id;
+    const veoLabel: Record<string, string> = {
+      queued: "Queued for Veo…",
+      submitting: "Sending to Veo…",
+      running: "Veo is generating (1–5 min)…",
+      downloading: "Saving to your Media Library…",
+    };
     for (;;) {
-      const r = await fetch(`/api/ai/veo/jobs?ids=${encodeURIComponent(jobId)}`);
+      const r = await fetch(`/api/video/jobs/${encodeURIComponent(jobId)}`);
       const d = await r.json();
-      const job = d.jobs?.[0];
+      const job = d.job;
       if (!job) throw new Error("AI video job disappeared");
-      const label: Record<string, string> = {
-        queued: "Queued for Veo…",
-        submitting: "Sending to Veo…",
-        running: "Veo is generating (1–5 min)…",
-        downloading: "Saving to your Media Library…",
-      };
-      setShotJobStatus((m) => ({ ...m, [shot.id]: label[job.status] || job.status }));
+      const label = provider === "veo" ? veoLabel[job.status] || job.status : `${job.message} ${job.progress}%`;
+      setShotJobStatus((m) => ({ ...m, [shot.id]: label }));
       if (job.status === "completed") return { videoUrl: job.videoUrl, thumbnailUrl: job.thumbnailUrl };
       if (job.status === "failed") throw new Error(job.error || "AI video generation failed (credits refunded)");
       await new Promise((ok) => setTimeout(ok, 5000));
@@ -550,9 +567,9 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
 
   const renderOneShot = async (shot: StoryboardShot): Promise<{ videoUrl: string; thumbnailUrl?: string; version: any; extra?: any }> => {
     if (renderMode === "stock") return renderShotWithStock(shot);
-    if (renderMode === "veo") {
-      const out = await renderShotWithVeo(shot);
-      const version = { id: `ver_${shot.id}_veo_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
+    if (renderMode === "veo" || renderMode === "runninghub") {
+      const out = await renderShotWithAI(shot, renderMode);
+      const version = { id: `ver_${shot.id}_${renderMode === "veo" ? "veo" : "rh"}_${Date.now()}`, versionNumber: (shot.versions?.length || 0) + 1, prompt: shot.prompt, videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl || "", createdAt: new Date().toISOString() } as any;
       return { videoUrl: out.videoUrl, thumbnailUrl: out.thumbnailUrl, version };
     }
     const res = await fetch("/api/ai/render-shot", {
@@ -614,7 +631,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
     setIsRenderingVideo(true);
     setRenderProgress(10);
     setStockNotice(null);
-    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : renderMode === "stock" ? "Finding free stock footage for each scene…" : "Rendering quick preview cards…");
+    setRenderStepText(renderMode === "veo" ? "Sending every shot to Veo (they generate in parallel)…" : renderMode === "runninghub" ? "Sending every shot to RunningHub (they generate in parallel)…" : renderMode === "stock" ? "Finding free stock footage for each scene…" : "Rendering quick preview cards…");
 
     try {
       // Re-render shots that are missing, or that were made in the other mode.
@@ -1490,7 +1507,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
               {/* Render mode: free stock footage (default), Veo Lite AI footage (credits) or quick preview */}
               <div className="p-3 rounded-xl bg-[#11151E] border border-[#272D3A] space-y-2" id="render-mode-picker">
                 <span className="text-[11px] font-semibold text-gray-300">How should shots be made?</span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     onClick={() => setRenderMode("stock")}
                     className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "stock" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"}`}
@@ -1507,7 +1524,18 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                     <span className="text-[10px] text-gray-400">
                       {veoConfig?.available
                         ? `~${veoCreditsForShots(shots)} credits for ${shots.length} shots (${veoConfig.creditsPerSecond}/sec)`
-                        : "Not available right now"}
+                        : "Not set up"}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => rhConfig?.configured && setRenderMode("runninghub")}
+                    disabled={!rhConfig?.configured}
+                    title={rhConfig?.configured ? undefined : rhConfig?.notConfiguredReason}
+                    className={`p-2 rounded-lg border text-left text-xs transition-all ${renderMode === "runninghub" ? "border-[#16D9F5] bg-[#16D9F5]/10 text-white" : "border-[#272D3A] text-gray-300"} ${!rhConfig?.configured ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    <span className="font-bold block">AI video, RunningHub (credits)</span>
+                    <span className="text-[10px] text-gray-400">
+                      {rhConfig?.configured ? `~${shots.reduce((a, s) => a + rhCreditsFor(s.duration), 0)} credits for ${shots.length} shots` : "Not set up"}
                     </span>
                   </button>
                   <button
@@ -1521,6 +1549,11 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 {renderMode === "veo" && (
                   <p className="text-[10px] text-gray-500">
                     Veo makes 4, 6 or 8 second clips; each is trimmed to its scene length. Failed shots are refunded.
+                  </p>
+                )}
+                {renderMode === "runninghub" && (
+                  <p className="text-[10px] text-gray-500">
+                    RunningHub makes {rhConfig?.minSeconds || 4}–{rhConfig?.maxSeconds || 15} second clips{rhConfig?.imageToVideo ? " (from the scene's start frame when it has one)" : ""}. Failed shots are refunded.
                   </p>
                 )}
                 {renderMode === "stock" && (
@@ -1539,7 +1572,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="font-semibold text-gray-300">Sequence Timeline Preview</span>
                   <span className="text-[#16D9F5] font-mono">
-                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" ? `~${veoCreditsForShots(shots)} credits` : renderMode === "stock" ? "Free stock footage" : "Free preview"}
+                    Total: {shots.reduce((a, b) => a + (b.duration || 0), 0)}s • {renderMode === "veo" || renderMode === "runninghub" ? `~${aiCreditsForShots(shots)} credits` : renderMode === "stock" ? "Free stock footage" : "Free preview"}
                   </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1.5">
@@ -1822,6 +1855,8 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                                 : shot.status === "completed"
                                 ? (shot as any).renderMode === "veo"
                                   ? "✓ AI video (Veo)"
+                                  : (shot as any).renderMode === "runninghub"
+                                  ? "✓ AI video (RunningHub)"
                                   : (shot as any).stockAttribution
                                   ? "✓ Stock footage"
                                   : (shot as any).stockFallback
@@ -1849,7 +1884,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                               className="px-3 py-1.5 rounded-lg bg-[#168CFF]/20 text-[#16D9F5] hover:bg-[#168CFF] hover:text-white border border-[#168CFF]/40 text-xs font-semibold flex items-center gap-1.5 transition-all"
                             >
                               <Play className={`w-3 h-3 ${shot.status === "generating" ? "animate-spin" : ""}`} />
-                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 1)} credits)` : renderMode === "stock" ? "Find stock clip (free)" : "Quick preview"}</span>
+                              <span>{shot.status === "generating" ? "Rendering Shot..." : renderMode === "veo" ? `Generate with Veo (${veoSecondsFor(shot.duration) * (veoConfig?.creditsPerSecond || 1)} credits)` : renderMode === "runninghub" ? `Generate with RunningHub (${rhCreditsFor(shot.duration)} credits)` : renderMode === "stock" ? "Find stock clip (free)" : "Quick preview"}</span>
                             </button>
                             </div>
                           </div>
