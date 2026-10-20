@@ -42,7 +42,7 @@ import { affiliateService } from "./server/affiliateService";
 import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService, PodcastError } from "./server/podcastService";
-import { stockFootageService, stockAvailable, STOCK_CONFIG } from "./server/stockFootageService";
+import { stockFootageService, stockAvailable, STOCK_CONFIG, PROVIDER_INFO, activeStockProvider, enabledStockProviders } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
 import crypto from "crypto";
 import { runninghubJobService, listVideoProviders, generateVideo, getVideoJobs } from "./server/videoGeneration";
@@ -2250,10 +2250,12 @@ app.post("/api/ai/render-shot", async (req: any, res) => {
   }
 });
 
-// 4a. Stock footage (free, Pexels). Falls back to a Quick preview card when there's no key or no match.
+// 4a. Stock footage (free, Pixabay or Pexels). Falls back to a Quick preview card when there's no key or no match.
 app.get("/api/ai/stock/config", (req, res) => {
-  res.json({ success: true, available: stockAvailable(), provider: "pexels", creditsPerShot: STOCK_CONFIG.creditsPerShot,
-    creditLine: STOCK_CONFIG.creditLine, creditUrl: STOCK_CONFIG.creditUrl });
+  const provider = activeStockProvider();
+  res.json({ success: true, available: stockAvailable(), provider, providers: enabledStockProviders(), creditsPerShot: STOCK_CONFIG.creditsPerShot,
+    providerLabel: provider ? PROVIDER_INFO[provider].label : null,
+    creditLine: provider ? PROVIDER_INFO[provider].creditLine : null, creditUrl: provider ? PROVIDER_INFO[provider].creditUrl : null });
 });
 app.post("/api/ai/stock/shot", async (req: any, res) => {
   const { shot, aspectRatio, excludeIds } = req.body || {};
@@ -2267,10 +2269,12 @@ app.post("/api/ai/stock/shot", async (req: any, res) => {
     res.json({ success: true, mode: "preview", fallback: true, notice, ...result });
   };
   try {
-    if (!stockAvailable()) return await fallback("Stock footage isn't set up yet (no Pexels API key), so this scene uses a Quick preview card.");
+    if (!stockAvailable()) return await fallback("Stock footage isn't set up yet (no Pixabay or Pexels API key), so this scene uses a Quick preview card.");
     let out: any = null;
     try {
-      out = await stockFootageService.renderShot({ userId, shot, aspectRatio: ar, excludeIds: Array.isArray(excludeIds) ? excludeIds : [], ai: getGenAI() });
+      out = await stockFootageService.renderShot({ userId, shot, aspectRatio: ar, excludeIds: (Array.isArray(excludeIds) ? excludeIds : [])
+        .filter((x: any) => (typeof x === "number" && Number.isFinite(x)) || (typeof x === "string" && /^[a-z]{0,10}:?\d{1,15}$/.test(x)))
+        .slice(0, 300), ai: getGenAI() });
     } catch (e: any) {
       console.warn("stock footage error:", e?.message);
       return await fallback(`Couldn't get stock footage (${e?.message || "error"}), so this scene uses a Quick preview card.`);
@@ -2434,9 +2438,14 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       });
       t += duration;
     }
-    const attributions = shots.map((s: any) => s.stockAttribution).filter((a: any) => a && a.provider === "pexels");
+    const attributions = shots.map((s: any) => s.stockAttribution).filter((a: any) => a && (a.provider === "pexels" || a.provider === "pixabay"));
+    const usedProviders = Array.from(new Set(attributions.map((a: any) => a.provider))) as Array<"pexels" | "pixabay">;
     const credits = attributions.length
-      ? [STOCK_CONFIG.creditLine, ...Array.from(new Set(attributions.map((a: any) => `Video by ${a.videographer} on Pexels`)))]
+      ? [
+          ...usedProviders.map((p) => PROVIDER_INFO[p].creditLine),
+          ...Array.from(new Set(attributions.map((a: any) =>
+            a.creditLine || (a.provider === "pixabay" ? `Video from Pixabay by ${a.videographer}` : `Video by ${a.videographer} on Pexels`)))),
+        ]
       : [];
     const outFileName = `ClipFlow_Master_${Date.now()}.mp4`;
     const outPath = path.join(STORAGE_DIRS.renders, outFileName);
@@ -2461,7 +2470,7 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       sizeBytes: fs.statSync(outPath).size,
       url: `/storage/renders/${outFileName}`,
       thumbnail: masterThumbnailUrl,
-      tags: ["ai-video", "render", ...(attributions.length ? ["pexels"] : [])],
+      tags: ["ai-video", "render", ...usedProviders],
       ...(attributions.length ? { attribution: attributions, credits } : {}),
       createdAt: new Date().toISOString().split("T")[0],
     });
