@@ -562,6 +562,9 @@ export default function App() {
         type: "success",
       });
       window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (urlParams.get("billing") === "portal_return") {
+      fetchBillingData();
+      window.history.replaceState({}, document.title, window.location.pathname);
     } else if (urlParams.get("billing") === "cancel") {
       setBillingBanner({
         message: "Checkout canceled. Your current plan was not changed.",
@@ -579,7 +582,7 @@ export default function App() {
         const res = await fetch("/api/billing/cancel-subscription", { method: "POST" });
         const data = await res.json();
         if (data.success) {
-          setBillingBanner({ message: "Successfully switched to Free plan.", type: "info" });
+          setBillingBanner({ message: "Your paid plan will end at the close of this billing period, then you'll be on Free.", type: "info" });
           fetchBillingData();
         }
         return;
@@ -631,16 +634,43 @@ export default function App() {
       const res = await fetch("/api/billing/cancel-subscription", { method: "POST" });
       const data = await res.json();
       if (data.success) {
-        setBillingBanner({
-          message: "Subscription canceled. Your account has returned to the Free tier.",
-          type: "info",
-        });
+        const when = data.effectiveAt ? new Date(data.effectiveAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "the end of this billing period";
+        setBillingBanner({ message: `Your plan will cancel on ${when}. You keep it until then.`, type: "info" });
         fetchBillingData();
+      } else {
+        setBillingBanner({ message: data.error || "Couldn't cancel the subscription.", type: "warning" });
       }
     } catch (e: any) {
       setBillingBanner({ message: "Couldn't cancel the subscription: " + e.message, type: "warning" });
     }
   };
+
+  const handleResumeSubscription = async () => {
+    try {
+      const res = await fetch("/api/billing/resume-subscription", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setBillingBanner({ message: "Your plan will keep renewing.", type: "success" });
+        fetchBillingData();
+      } else {
+        setBillingBanner({ message: data.error || "Couldn't resume the subscription.", type: "warning" });
+      }
+    } catch (e: any) {
+      setBillingBanner({ message: "Couldn't resume the subscription: " + e.message, type: "warning" });
+    }
+  };
+
+  const handleManageBilling = async () => {
+    try {
+      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const data = await res.json();
+      if (data.success && data.url) window.location.href = data.url;
+      else setBillingBanner({ message: data.error || "Couldn't open billing.", type: "warning" });
+    } catch (e: any) {
+      setBillingBanner({ message: "Couldn't open billing: " + e.message, type: "warning" });
+    }
+  };
+
 
   const handleUpdateClip = (updated: ClipItem) => {
     setClips((prev) => {
@@ -1986,6 +2016,8 @@ export default function App() {
                 onSelectPlan={handleSelectPlan}
                 onBuyCredits={handleBuyCredits}
                 onCancelSubscription={handleCancelSubscription}
+                onResumeSubscription={handleResumeSubscription}
+                onManageBilling={handleManageBilling}
                 onNavigateToAffiliates={() => setCurrentView("affiliate")}
                 isStripeConfigured={isStripeConfigured}
               />

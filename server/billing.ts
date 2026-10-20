@@ -23,12 +23,35 @@ export interface Plan {
   features: string[];
 }
 
+/**
+ * Stripe Price ids come from env (STRIPE_PRICE_BASIC, STRIPE_PRICE_PRO, ...), so test and live
+ * prices never live in code. Plans without a price (free, legacy starter/creator) can't be bought.
+ */
+export const PAID_PLAN_IDS = ["basic", "pro", "agent", "agent_studio", "automated_pipeline"] as const;
+export function stripePriceEnvVar(planId: string): string {
+  return `STRIPE_PRICE_${planId.toUpperCase()}`;
+}
+export function stripePriceIdFor(planId: string): string {
+  if (!(PAID_PLAN_IDS as readonly string[]).includes(planId)) return "";
+  return (process.env[stripePriceEnvVar(planId)] || "").trim();
+}
+/** Map a Stripe price back to a plan: our env ids first, then the price's plan_id metadata / lookup key. */
+export function planIdForStripePrice(price: { id?: string; metadata?: Record<string, string>; lookup_key?: string | null } | undefined | null): Plan["id"] | undefined {
+  if (!price) return undefined;
+  for (const id of PAID_PLAN_IDS) if (price.id && stripePriceIdFor(id) === price.id) return id;
+  const meta = price.metadata?.plan_id;
+  if (meta && (PAID_PLAN_IDS as readonly string[]).includes(meta)) return meta as Plan["id"];
+  const m = /^clipflow_([a-z_]+)_monthly$/.exec(price.lookup_key || "");
+  if (m && (PAID_PLAN_IDS as readonly string[]).includes(m[1])) return m[1] as Plan["id"];
+  return undefined;
+}
+
 export const PLANS: Record<string, Plan> = {
   basic: {
     id: "basic",
     name: "Basic",
     priceMonthly: 10,
-    stripePriceId: "price_basic_10",
+    get stripePriceId() { return stripePriceIdFor("basic"); },
     videoProcessingMinutes: 150,
     storageGb: 15,
     aiCredits: 50,
@@ -57,7 +80,7 @@ export const PLANS: Record<string, Plan> = {
     id: "pro",
     name: "Pro",
     priceMonthly: 15,
-    stripePriceId: "price_pro_15",
+    get stripePriceId() { return stripePriceIdFor("pro"); },
     badge: "MOST POPULAR",
     videoProcessingMinutes: 500,
     storageGb: 50,
@@ -88,7 +111,7 @@ export const PLANS: Record<string, Plan> = {
     id: "agent",
     name: "Agent",
     priceMonthly: 25,
-    stripePriceId: "price_agent_25",
+    get stripePriceId() { return stripePriceIdFor("agent"); },
     videoProcessingMinutes: 800,
     storageGb: 75,
     aiCredits: 250,
@@ -117,7 +140,7 @@ export const PLANS: Record<string, Plan> = {
     id: "agent_studio",
     name: "Agent Studio",
     priceMonthly: 35,
-    stripePriceId: "price_agent_studio_35",
+    get stripePriceId() { return stripePriceIdFor("agent_studio"); },
     badge: "AGENT POWERHOUSE",
     videoProcessingMinutes: 1500,
     storageGb: 125,
@@ -148,7 +171,7 @@ export const PLANS: Record<string, Plan> = {
     id: "automated_pipeline",
     name: "Automated Pipeline",
     priceMonthly: 100,
-    stripePriceId: "price_automated_pipeline_100",
+    get stripePriceId() { return stripePriceIdFor("automated_pipeline"); },
     badge: "AUTONOMOUS ENGINE",
     videoProcessingMinutes: 3000,
     storageGb: 250,
@@ -180,7 +203,7 @@ export const PLANS: Record<string, Plan> = {
     id: "free",
     name: "Free",
     priceMonthly: 0,
-    stripePriceId: "price_free_tier",
+    get stripePriceId() { return stripePriceIdFor("free"); },
     videoProcessingMinutes: 30,
     storageGb: 2,
     aiCredits: 10, // starter credits so free users can try AI generation (2 scripts/month)
@@ -210,7 +233,7 @@ export const PLANS: Record<string, Plan> = {
     id: "starter",
     name: "Starter",
     priceMonthly: 10,
-    stripePriceId: "price_starter_799",
+    get stripePriceId() { return stripePriceIdFor("starter"); },
     videoProcessingMinutes: 100,
     storageGb: 10,
     aiCredits: 25,
@@ -240,7 +263,7 @@ export const PLANS: Record<string, Plan> = {
     id: "creator",
     name: "Creator",
     priceMonthly: 15,
-    stripePriceId: "price_creator_1299",
+    get stripePriceId() { return stripePriceIdFor("creator"); },
     badge: "MOST POPULAR",
     videoProcessingMinutes: 300,
     storageGb: 25,
@@ -274,7 +297,7 @@ export const PLANS: Record<string, Plan> = {
 export interface Subscription {
   id: string;
   workspaceId: string;
-  planId: "free" | "starter" | "creator" | "pro";
+  planId: Plan["id"];
   status: "active" | "canceled" | "past_due" | "trialing" | "incomplete";
   currentPeriodStart: string;
   currentPeriodEnd: string;
@@ -534,7 +557,10 @@ export class BillingService {
     workspaceId = this.normalizeWorkspaceId(workspaceId);
     this.ensureTables();
     const db = readDb();
-    const sub = db.subscriptions?.find((s: Subscription) => s.workspaceId === workspaceId && s.status === "active");
+    // The workspace's own row in any state: past_due keeps the plan while Stripe retries the card
+    // (Smart Retries), instead of silently appending a second "free" row.
+    const mine = (db.subscriptions || []).filter((s: Subscription) => s.workspaceId === workspaceId);
+    const sub = mine.find((s: Subscription) => s.status === "active" || s.status === "trialing") || mine.find((s: Subscription) => s.status === "past_due") || mine[0];
     if (sub) return sub;
 
     // Fallback to active free tier
@@ -930,6 +956,11 @@ export class BillingService {
     status: Subscription["status"];
     currentPeriodEnd: string;
     workspaceId?: string;
+    cancelAtPeriodEnd?: boolean;
+    // true (default) = a paid event (checkout, renewal invoice): refill the plan's monthly credits.
+    // false = a plain subscription update (cancel toggle, card change): keep the remaining balance,
+    // only capping it on a downgrade, so toggling in the portal can't mint credits.
+    grantCredits?: boolean;
   }): { applied: boolean; reason?: string } {
     this.ensureTables();
     const db = readDb();
@@ -942,6 +973,7 @@ export class BillingService {
     }
 
     let sub = db.subscriptions?.find((s: Subscription) => s.workspaceId === workspaceId);
+    const previousPlanId = sub?.planId;
     if (!sub) {
       sub = {
         id: event.subscriptionId,
@@ -950,7 +982,7 @@ export class BillingService {
         status: event.status,
         currentPeriodStart: new Date().toISOString(),
         currentPeriodEnd: event.currentPeriodEnd,
-        cancelAtPeriodEnd: false,
+        cancelAtPeriodEnd: !!event.cancelAtPeriodEnd,
         stripeCustomerId: event.customerId,
         stripeSubscriptionId: event.subscriptionId,
         updatedAt: new Date().toISOString(),
@@ -962,6 +994,7 @@ export class BillingService {
       sub.currentPeriodEnd = event.currentPeriodEnd;
       sub.stripeSubscriptionId = event.subscriptionId;
       if (event.customerId) sub.stripeCustomerId = event.customerId;
+      if (typeof event.cancelAtPeriodEnd === "boolean") sub.cancelAtPeriodEnd = event.cancelAtPeriodEnd;
       sub.updatedAt = new Date().toISOString();
     }
 
@@ -981,12 +1014,19 @@ export class BillingService {
 
     // Update credit balance
     let cb = db.credit_balances?.find((c: CreditBalance) => c.workspaceId === workspaceId);
-    if (cb) {
-      cb.subscriptionCredits = plan.aiCredits;
-      cb.totalAvailable = cb.subscriptionCredits + cb.purchasedCredits;
-      cb.periodMonth = monthKey;
-      cb.updatedAt = new Date().toISOString();
+    if (!cb) {
+      cb = { workspaceId, subscriptionCredits: 0, purchasedCredits: 0, totalAvailable: 0, periodMonth: monthKey, updatedAt: new Date().toISOString() } as CreditBalance;
+      db.credit_balances = db.credit_balances || [];
+      db.credit_balances.push(cb);
     }
+    if (event.grantCredits !== false) {
+      cb.subscriptionCredits = plan.aiCredits;
+      cb.periodMonth = monthKey;
+    } else if (previousPlanId !== event.planId) {
+      cb.subscriptionCredits = Math.min(cb.subscriptionCredits || 0, plan.aiCredits);
+    }
+    cb.totalAvailable = cb.subscriptionCredits + cb.purchasedCredits;
+    cb.updatedAt = new Date().toISOString();
 
     // Record processed event
     db.billing_events.push({
@@ -1003,12 +1043,16 @@ export class BillingService {
 
   // Cancel Subscription
   public cancelSubscription(workspaceId = this.defaultWorkspaceId): { success: boolean; effectiveAt: string } {
+    return this.setCancelAtPeriodEnd(workspaceId, true);
+  }
+
+  /** Local mirror of Stripe's cancel_at_period_end (true = cancel at cycle end, false = keep renewing). */
+  public setCancelAtPeriodEnd(workspaceId: string, value: boolean): { success: boolean; effectiveAt: string } {
     workspaceId = this.normalizeWorkspaceId(workspaceId);
     const db = readDb();
     const sub = db.subscriptions?.find((s: Subscription) => s.workspaceId === workspaceId);
     if (!sub) throw new Error("No active subscription found.");
-
-    sub.cancelAtPeriodEnd = true;
+    sub.cancelAtPeriodEnd = value;
     sub.updatedAt = new Date().toISOString();
     writeDb(db);
     return { success: true, effectiveAt: sub.currentPeriodEnd };

@@ -28,6 +28,8 @@ interface PricingViewProps {
   onSelectPlan: (planId: Plan["id"]) => void;
   onBuyCredits: (packId: string) => void;
   onCancelSubscription?: () => void;
+  onResumeSubscription?: () => void;
+  onManageBilling?: () => void;
   onNavigateToAffiliates?: () => void;
   isStripeConfigured?: boolean;
 }
@@ -40,6 +42,8 @@ export const PricingView: React.FC<PricingViewProps> = ({
   onSelectPlan,
   onBuyCredits,
   onCancelSubscription,
+  onResumeSubscription,
+  onManageBilling,
   onNavigateToAffiliates,
   isStripeConfigured = false,
 }) => {
@@ -421,8 +425,8 @@ export const PricingView: React.FC<PricingViewProps> = ({
         <div className="p-4 rounded-xl bg-[#11151E] border border-[#272D3A] flex items-center justify-between text-xs">
           <div className="space-y-0.5">
             <span className="font-semibold text-white">Active Paid Subscription</span>
-            <p className="text-[#9CA5B5]">
-              Renews automatically on{" "}
+            <p className={subscription.cancelAtPeriodEnd ? "text-amber-300" : "text-[#9CA5B5]"}>
+              {subscription.cancelAtPeriodEnd ? "Cancels on " : "Renews automatically on "}
               {new Date(subscription.currentPeriodEnd).toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
@@ -430,8 +434,19 @@ export const PricingView: React.FC<PricingViewProps> = ({
               })}
             </p>
           </div>
-          <div>
-            {showCancelConfirm ? (
+          <div className="flex items-center gap-3">
+            {onManageBilling && String(subscription.stripeCustomerId || "").startsWith("cus_") && !showCancelConfirm && (
+              <button onClick={onManageBilling} className="text-[#16D9F5] hover:underline cursor-pointer">
+                Manage billing
+              </button>
+            )}
+            {subscription.cancelAtPeriodEnd ? (
+              onResumeSubscription && (
+                <button onClick={onResumeSubscription} className="px-2.5 py-1 bg-[#168CFF] hover:bg-[#168CFF]/80 text-white rounded-lg font-semibold cursor-pointer">
+                  Keep my plan
+                </button>
+              )
+            ) : showCancelConfirm ? (
               <div className="flex items-center gap-2">
                 <span className="text-rose-400 font-medium">Cancel plan at cycle end?</span>
                 <button
