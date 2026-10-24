@@ -160,7 +160,7 @@ export const SocialAccountsView: React.FC<SocialAccountsViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5">
-                      {acc.platform === "linkedin" || acc.platform === "meta" ? (
+                      {acc.platform === "linkedin" ? (
                         <span className="text-[10px] font-semibold px-2.5 py-1 rounded bg-[#161a29] border border-amber-500/30 text-amber-300">
                           Coming soon (beta)
                         </span>
