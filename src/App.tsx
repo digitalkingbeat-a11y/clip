@@ -313,12 +313,21 @@ export default function App() {
           Authorization: `Bearer ${token}`,
         },
       })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success && data.user) {
+        .then(async (res) => {
+          const data = await res.json().catch(() => null);
+          if (res.ok && data?.success && data.user) {
             setCurrentUser(data.user);
             setIsAdmin(Boolean(data.isAdmin));
             localStorage.setItem("clipflow_user_profile", JSON.stringify(data.user));
+            return;
+          }
+          // An expired or revoked token must not leave a stale profile signed in:
+          // drop the local session so the public landing page renders again.
+          if (res.status === 401 && localStorage.getItem("clipflow_auth_token") === token) {
+            localStorage.removeItem("clipflow_auth_token");
+            localStorage.removeItem("clipflow_user_profile");
+            setCurrentUser(null);
+            setIsAdmin(false);
           }
         })
         .catch((err) => console.warn("Could not verify session token:", err));
