@@ -1150,7 +1150,11 @@ export class BillingService {
         stripeFee;
       const estimatedCost = Number((count * perUserCost).toFixed(2));
       const margin = Number((revenue - estimatedCost).toFixed(2));
-      const marginPct = revenue > 0 ? Number(((margin / revenue) * 100).toFixed(1)) : 0;
+      // The percentage represents plan unit economics, so it remains useful even when
+      // the plan currently has no subscribers. Revenue/cost/margin dollar totals still
+      // remain zero for a zero-subscriber plan.
+      const perUserMargin = p.priceMonthly - perUserCost;
+      const marginPct = p.priceMonthly > 0 ? Number(((perUserMargin / p.priceMonthly) * 100).toFixed(1)) : 0;
 
       return {
         planId: p.id,

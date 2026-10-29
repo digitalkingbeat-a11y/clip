@@ -8363,9 +8363,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           )}
 
           {/* Safe Area Guides */}
-          <div className="absolute inset-2 border border-dashed border-white/10 pointer-events-none rounded-lg flex items-end justify-center pb-1">
-            <span className="text-[7px] text-white/30 font-mono uppercase">Safe Zone</span>
-          </div>
+          {showSafeZones && (
+            <div className="absolute inset-0 pointer-events-none z-20 select-none">
+              <div className="absolute inset-[5%] border border-white/20 border-dashed rounded-xs" />
+              <div className="absolute inset-[10%] border border-white/10 rounded-xs flex items-end justify-center pb-1">
+                <span className="text-[7px] text-white/35 font-mono uppercase tracking-wider">Safe Zone</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -8475,7 +8480,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               onClick={() => setShowSafeZones((prev) => !prev)}
               className={`h-6 px-1.5 rounded text-[10px] font-medium flex items-center gap-1 cursor-pointer transition-colors border ${
                 showSafeZones
-                  ? "bg-[#168CFF]/20 text-[#16D9F5] border-[#16D9F5]/40"
+                  ? "bg-[#242A36] text-[#D7DCE5] border-[#3A4351] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
                   : "bg-[#141A25] text-gray-400 hover:text-white border-[#212735]"
               }`}
               title="Toggle Safe Zones Guide Overlay"
