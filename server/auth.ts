@@ -74,31 +74,35 @@ export class AuthService {
 
     // If Supabase is connected, register with Supabase Auth
     if (this.isSupabaseReady() && this.supabase) {
-      const { data, error } = await this.supabase.auth.admin.createUser({
-        email: cleanEmail,
-        password,
-        user_metadata: { name: displayName },
-        email_confirm: true,
-      });
+      try {
+        const { data, error } = await this.supabase.auth.admin.createUser({
+          email: cleanEmail,
+          password,
+          user_metadata: { name: displayName },
+          email_confirm: true,
+        });
 
-      if (error) {
-        throw new Error(error.message);
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        const userId = data.user.id;
+        const userProfile: UserProfile = {
+          id: userId,
+          email: cleanEmail,
+          name: displayName,
+          avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanEmail}`,
+          planId: "free",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        const token = this.createSession(userId);
+        this.syncLocalUserProfile(userProfile, password);
+        return { user: userProfile, token };
+      } catch (err: any) {
+        console.warn("Supabase auth createUser failed, falling back to local DB:", err.message);
       }
-
-      const userId = data.user.id;
-      const userProfile: UserProfile = {
-        id: userId,
-        email: cleanEmail,
-        name: displayName,
-        avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanEmail}`,
-        planId: "free",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      const token = this.createSession(userId);
-      this.syncLocalUserProfile(userProfile, password);
-      return { user: userProfile, token };
     }
 
     // Local / Self-contained database registration
@@ -145,47 +149,51 @@ export class AuthService {
 
     // If Supabase is connected
     if (this.isSupabaseReady() && this.supabase) {
-      const { data, error } = await this.supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password,
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      const userId = data.user.id;
-      const token = this.createSession(userId);
-
-      const db = readDb();
-      let user = db.users?.find((u: any) => u.id === userId || u.email === cleanEmail);
-      if (!user) {
-        user = {
-          id: userId,
+      try {
+        const { data, error } = await this.supabase.auth.signInWithPassword({
           email: cleanEmail,
-          name: data.user.user_metadata?.name || cleanEmail.split("@")[0],
-          avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanEmail}`,
-          planId: "free",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        if (!db.users) db.users = [];
-        db.users.push(user);
-        writeDb(db);
-      }
+          password,
+        });
 
-      return {
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          avatarUrl: user.avatarUrl,
-          planId: user.planId,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-        },
-        token,
-      };
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        const userId = data.user.id;
+        const token = this.createSession(userId);
+
+        const db = readDb();
+        let user = db.users?.find((u: any) => u.id === userId || u.email === cleanEmail);
+        if (!user) {
+          user = {
+            id: userId,
+            email: cleanEmail,
+            name: data.user.user_metadata?.name || cleanEmail.split("@")[0],
+            avatarUrl: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanEmail}`,
+            planId: "free",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          if (!db.users) db.users = [];
+          db.users.push(user);
+          writeDb(db);
+        }
+
+        return {
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            avatarUrl: user.avatarUrl,
+            planId: user.planId,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+          },
+          token,
+        };
+      } catch (err: any) {
+        console.warn("Supabase auth signIn failed, falling back to local DB:", err.message);
+      }
     }
 
     // Local / Self-contained database verification
