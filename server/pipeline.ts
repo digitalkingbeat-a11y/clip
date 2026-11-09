@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { readDb, writeDb, STORAGE_DIRS } from "./storage";
-import { ffmpegService, TimedCaptionWord, RenderOptions } from "./ffmpeg";
+import { ffmpegService, TimedCaptionWord, RenderOptions, AudioMixClip } from "./ffmpeg";
 import { transcriptionService, TranscriptionResult } from "./transcription";
 import { clipAnalyzer, ClipCandidate } from "./clipAnalyzer";
 import { billingService } from "./billing";
@@ -527,6 +527,29 @@ export class PipelineManager {
       });
     }
 
+    // Audio-track clips: only this user's files are mixed in.
+    const rawAudio: any[] = Array.isArray((options as any)?.audioClips) ? (options as any).audioClips.slice(0, 64) : [];
+    const audioClips: AudioMixClip[] = [];
+    for (const [i, a] of rawAudio.entries()) {
+      if (!a || a.muted) continue;
+      const localPath = a.sourceUrl ? resolveOwnedMediaPath(String(a.sourceUrl), userId, ["uploads", "renders", "clips"]) : "";
+      if (!localPath) {
+        const err: any = new Error(`Audio clip ${i + 1} uses a file that isn't in your library. Re-upload it or remove that clip, then export again.`);
+        err.userFacing = true;
+        throw err;
+      }
+      const num = (v: any, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+      audioClips.push({
+        localPath,
+        startTime: num(a.startTime),
+        sourceStartTime: Math.max(0, num(a.sourceStartTime)),
+        duration: Math.max(0, num(a.duration)),
+        volume: num(a.volume, 1),
+        speed: num(a.speed, 1) || 1,
+      });
+    }
+    if (options) delete (options as any).audioClips;
+
     if (!inputClipPath && !hasScenes) {
       if (!clip || project?.userId !== userId) throw new Error("Clip not found.");
       inputClipPath = path.join(STORAGE_DIRS.clips, `clip_916_${clip.id}.mp4`);
@@ -549,6 +572,19 @@ export class PipelineManager {
     } catch (renderError: any) {
       console.warn("[PipelineManager] Render execution warning:", renderError.message);
       throw new Error(`Rendering failed: ${renderError.message}`);
+    }
+
+    const videoVolume = Number.isFinite(Number((options as any)?.videoVolume)) ? Number((options as any).videoVolume) : 1;
+    if (audioClips.length > 0 || videoVolume !== 1) {
+      try {
+        await ffmpegService.mixAudioClips(renderPath, audioClips, Number((options as any)?.timelineStart) || 0, hasScenes ? 1 : videoVolume);
+      } catch (mixErr: any) {
+        console.warn("[PipelineManager] Audio mix failed:", mixErr?.message);
+        try { if (fs.existsSync(renderPath)) fs.unlinkSync(renderPath); } catch {}
+        const err: any = new Error("Couldn't mix the audio tracks into the export. Try again, or remove the audio clip that won't play.");
+        err.userFacing = true;
+        throw err;
+      }
     }
 
     registerOwnedFile(renderFilename, userId);

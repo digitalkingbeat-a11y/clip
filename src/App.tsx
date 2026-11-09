@@ -2169,6 +2169,7 @@ export default function App() {
         activeClip={clips[0]}
         brandKit={brandKit}
         timelineItems={timelineItems}
+        timelineTracks={timelineTracks}
       />
 
       <RepurposeModal

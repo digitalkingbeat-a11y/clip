@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { AspectRatio, BrandKit } from "../types";
 import { TikTokAdsModal } from "./TikTokAdsModal";
+import { collectExportAudioClips, videoClipGain } from "../utils/exportAudio";
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -29,6 +30,7 @@ interface ExportModalProps {
   activeClip?: any;
   brandKit?: BrandKit;
   timelineItems?: any[];
+  timelineTracks?: any[];
 }
 
 interface ReadinessGate {
@@ -48,6 +50,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   activeClip,
   brandKit,
   timelineItems,
+  timelineTracks,
 }) => {
   const [resolution, setResolution] = useState<string>("1080x1920 (Vertical 9:16)");
   const [fps, setFps] = useState<number>(30);
@@ -250,9 +253,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               sourceUrl: v.sourceUrl,
               onScreenText: overlayTextItem?.text || overlayTextItem?.name || "",
               voiceover: voiceItem?.text || "",
+              volume: videoClipGain(v, timelineTracks || []),
             };
           })
         : undefined;
+
+      // Output t=0 maps to the first picture clip's timeline position; audio-track clips
+      // are placed relative to it (the server trims/delays and mixes them).
+      const timelineStart = scenesPayload ? visualItems[0]?.startTime || 0 : mainVideo?.startTime || 0;
+      const audioClips = collectExportAudioClips(timelineItems || [], timelineTracks || []);
+      const videoVolume = videoClipGain(mainVideo, timelineTracks || []);
 
       let completed = false;
       try {
@@ -273,6 +283,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               captionStyle: brandKit?.captionPreset || "hormozi",
               scenes: scenesPayload,
               isTestRender: isTest,
+              timelineStart,
+              audioClips,
+              videoVolume,
             },
           }),
         });
