@@ -20,6 +20,7 @@ import {
 import { AspectRatio, BrandKit } from "../types";
 import { TikTokAdsModal } from "./TikTokAdsModal";
 import { collectExportAudioClips, videoClipGain } from "../utils/exportAudio";
+import { layoutScenePieces } from "../utils/exportScenes";
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -236,11 +237,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         }));
 
       const visualItems = (timelineItems || [])
-        .filter((it) => it.trackId === "track_video" || it.type === "video")
+        .filter((it) => (it.trackId === "track_video" || it.type === "video") && !it.hidden)
         .sort((a, b) => a.startTime - b.startTime);
 
-      const scenesPayload = !isTest && visualItems.length > 1
-        ? visualItems.map((v, i) => {
+      // Empty space between picture clips is exported as black + silence, so the render
+      // keeps the timeline's timing (and audio-track clips stay in sync).
+      // The export spans every picture and audio-track clip, like the timeline does.
+      const audioClips = collectExportAudioClips(timelineItems || [], timelineTracks || []);
+      const pieces = layoutScenePieces(visualItems, {
+        start: audioClips.length ? Math.min(...audioClips.map((c) => c.startTime)) : undefined,
+        end: audioClips.length ? Math.max(...audioClips.map((c) => c.startTime + c.duration)) : undefined,
+      });
+      const scenesPayload = !isTest && pieces.length > 1
+        ? pieces.map((piece, i) => {
+            if (piece.gap) {
+              return { sceneNumber: i + 1, startTime: piece.startTime, duration: piece.duration, gap: true };
+            }
+            const v = piece.item;
             const overlayTextItem = (timelineItems || []).find(
               (t) => (t.trackId === "track_text" || t.type === "text") && Math.abs(t.startTime - v.startTime) < 0.5
             );
@@ -249,8 +262,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             );
             return {
               sceneNumber: i + 1,
-              duration: v.duration,
+              startTime: piece.startTime,
+              duration: piece.duration,
               sourceUrl: v.sourceUrl,
+              sourceStartTime: Math.max(0, (v.sourceStartTime || 0) + (piece.startTime - v.startTime)),
               onScreenText: overlayTextItem?.text || overlayTextItem?.name || "",
               voiceover: voiceItem?.text || "",
               volume: videoClipGain(v, timelineTracks || []),
@@ -258,10 +273,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           })
         : undefined;
 
-      // Output t=0 maps to the first picture clip's timeline position; audio-track clips
+      // Output t=0 maps to the start of the exported range; audio-track clips
       // are placed relative to it (the server trims/delays and mixes them).
-      const timelineStart = scenesPayload ? visualItems[0]?.startTime || 0 : mainVideo?.startTime || 0;
-      const audioClips = collectExportAudioClips(timelineItems || [], timelineTracks || []);
+      const timelineStart = scenesPayload ? pieces[0]?.startTime || 0 : mainVideo?.startTime || 0;
       const videoVolume = videoClipGain(mainVideo, timelineTracks || []);
 
       let completed = false;

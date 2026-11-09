@@ -815,52 +815,64 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const segmentPaths: string[] = [];
 
     try {
+      // Segment lengths are snapped to the 30fps frame grid on cumulative timeline time, so
+      // rounding never accumulates and the output stays in sync with the timeline.
+      // Segments carry PCM audio (Matroska) so joining them adds no AAC priming gaps.
+      const FPS = 30;
+      let elapsed = 0;
       for (let i = 0; i < scenes.length; i++) {
-        const sc = scenes[i];
-        const segDuration = Math.max(1, sc.duration || 5);
-        const segPath = path.join(tempDir, `seg_${i}.mp4`);
+        const sc: any = scenes[i];
+        const wanted = Number(sc.duration) > 0 ? Number(sc.duration) : 5;
+        const f0 = Math.round(elapsed * FPS);
+        elapsed += Math.max(1 / FPS, wanted);
+        const frames = Math.max(1, Math.round(elapsed * FPS) - f0);
+        const segDuration = frames / FPS;
+        const segPath = path.join(tempDir, `seg_${i}.mkv`);
 
         // Only paths resolved server-side for the requesting user (see resolveOwnedMediaPath).
-        const inputPath = (sc as any).localPath && fs.existsSync((sc as any).localPath) ? (sc as any).localPath : "";
+        const inputPath = !sc.gap && sc.localPath && fs.existsSync(sc.localPath) ? sc.localPath : "";
 
-        // Color palette for scenes if synthetic background is needed
+        // Gaps on the timeline are black; scenes with no media get a colour card.
         const bgColors = ["0x1e1b4b", "0x0f172a", "0x111827", "0x311042", "0x022c22"];
-        const chosenColor = bgColors[i % bgColors.length];
+        const chosenColor = sc.gap ? "black" : bgColors[i % bgColors.length];
+        const pcm = ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"];
+        const vEnc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"];
 
         const segArgs: string[] = ["-y"];
 
-        if (inputPath && fs.existsSync(inputPath)) {
+        if (inputPath) {
           // Real footage (uploads, renders or Veo shots). Veo clips come in fixed
           // 4/6/8s lengths: trim longer clips, hold the last frame on shorter ones.
           const hasAudio = await this.hasAudioStream(inputPath);
-          const fit = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${segDuration.toFixed(3)}`;
+          const mono = hasAudio && (await this.audioChannels(inputPath)) === 1;
+          const inPoint = Math.max(0, Number(sc.sourceStartTime) || 0);
+          const gain = Math.max(0, Math.min(2, Number(sc.volume ?? 1)));
+          const fit = `scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},setsar=1,fps=${FPS},tpad=stop_mode=clone:stop_duration=${segDuration.toFixed(3)}`;
+          if (inPoint > 0) segArgs.push("-ss", inPoint.toFixed(3));
           segArgs.push("-i", inputPath);
-          if (!hasAudio) segArgs.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo");
+          if (!hasAudio) segArgs.push("-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo");
+          // Mono is copied to both channels at full level, matching single-clip exports.
+          const aChain = `${mono ? "pan=stereo|c0=c0|c1=c0," : ""}aresample=48000,aformat=sample_fmts=s16:channel_layouts=stereo,volume=${gain.toFixed(3)},apad`;
           segArgs.push(
             "-filter_complex",
-            hasAudio
-              ? `[0:v]${fit}[v];[0:a]aresample=44100,volume=${Math.max(0, Math.min(2, Number((sc as any).volume ?? 1))).toFixed(3)},apad[a]`
-              : `[0:v]${fit}[v]`,
+            hasAudio ? `[0:v]${fit}[v];[0:a]${aChain}[a]` : `[0:v]${fit}[v]`,
             "-map", "[v]",
             "-map", hasAudio ? "[a]" : "1:a",
-            "-t", segDuration.toFixed(3),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-pix_fmt", "yuv420p",
+            "-frames:v", String(frames),
+            "-t", segDuration.toFixed(4),
+            ...vEnc, ...pcm,
             segPath
           );
         } else {
-          // No source media: plain colour card with silent audio
+          // Gap (black) or no source media (colour card), with silence.
           segArgs.push(
             "-f", "lavfi",
-            "-i", `color=c=${chosenColor}:s=${targetW}x${targetH}:d=${segDuration.toFixed(3)}:r=30`,
+            "-i", `color=c=${chosenColor}:s=${targetW}x${targetH}:r=${FPS}`,
             "-f", "lavfi",
-            "-i", "anullsrc=r=44100:cl=stereo",
-            "-t", segDuration.toFixed(3),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-pix_fmt", "yuv420p",
-            "-shortest",
+            "-i", "anullsrc=r=48000:cl=stereo",
+            "-frames:v", String(frames),
+            "-t", segDuration.toFixed(4),
+            ...vEnc, ...pcm,
             segPath
           );
         }
@@ -880,6 +892,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         "-f", "concat",
         "-safe", "0",
         "-i", concatListFile,
+        "-t", (Math.round(elapsed * FPS) / FPS).toFixed(4),
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "20",
