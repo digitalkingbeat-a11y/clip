@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { BrandKit, ClipItem, Project, ScheduledPost, SocialAccount, SocialPlatform } from "../types";
 import { BatchExportModal } from "./BatchExportModal";
+import { uploadMediaFiles } from "../utils/mediaUpload";
 
 interface ClipsStudioProps {
   clips: ClipItem[];
@@ -165,9 +166,7 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
       }
       let res: Response;
       if (file) {
-        const fd = new FormData();
-        fd.append("file", file);
-        res = await fetch("/api/upload", { method: "POST", body: fd });
+        res = await uploadMediaFiles([file], { field: "file" });
       } else {
         res = await fetch("/api/upload/from-url", {
           method: "POST",

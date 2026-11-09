@@ -147,6 +147,7 @@ import {
   ReverseFlagMonitorMode,
   ModularZoneAssignments,
 } from "../types";
+import { uploadMediaFiles } from "../utils/mediaUpload";
 
 export const TIMELINE_ZOOM_SCALES: Record<string, number> = {
   "100%": 36, // 36 px/sec - 100% standard view
@@ -4821,9 +4822,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
   // Upload files into the user's server library (no AI processing, no project).
   const uploadToLibrary = async (files: File[]): Promise<any[]> => {
-    const fd = new FormData();
-    for (const f of files) fd.append("files", f, f.name);
-    const res = await fetch("/api/upload?library=1", { method: "POST", body: fd });
+    const res = await uploadMediaFiles(files, { library: true });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401) throw new Error("Sign in to import media.");
     if (!res.ok || !data?.success) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);

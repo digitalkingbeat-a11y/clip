@@ -14,3 +14,4 @@ storage/
 
 # ffmpeg/ffprobe binaries fetched at runtime
 bin/
+.vercel

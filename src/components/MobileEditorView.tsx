@@ -3,6 +3,7 @@ import { Play, Pause, Undo2, Redo2, Download, Plus, Split, Type, Gauge, Volume2,
 import { MediaBay } from "./MediaBay";
 import { useTimelineAudio } from "../hooks/useTimelineAudio";
 import { AspectRatio, BrandKit, TimelineItem, TimelineTrack, Project, MediaItem, TrackType } from "../types";
+import { uploadMediaFiles } from "../utils/mediaUpload";
 
 /**
  * Phone editor (< 768px). Preview on top, a real multi-track timeline below, a compact tool strip
@@ -262,9 +263,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   // ---------- Tools ----------
   // Files go into the user's server library first (so they survive reloads and can be exported).
   const uploadFiles = async (files: File[]): Promise<MediaItem[]> => {
-    const fd = new FormData();
-    for (const f of files) fd.append("files", f, f.name);
-    const res = await fetch("/api/upload?library=1", { method: "POST", body: fd });
+    const res = await uploadMediaFiles(files, { library: true });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401) throw new Error("Sign in to import media.");
     if (!res.ok || !data?.success) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);

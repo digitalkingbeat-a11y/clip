@@ -10,6 +10,9 @@ import { GoogleGenAI } from "@google/genai";
 
 import { initStorage, readDb, writeDb, STORAGE_DIRS } from "./server/storage";
 import { ffmpegService } from "./server/ffmpeg";
+import { cloudEnabled, cloudSyncMiddleware, streamFromBlob, deleteFromBlob } from "./server/cloudSync";
+import { handleUpload } from "@vercel/blob/client";
+import { get as getBlob, del as delBlob } from "@vercel/blob";
 import { transcriptionService } from "./server/transcription";
 import { clipAnalyzer } from "./server/clipAnalyzer";
 import { pipelineManager } from "./server/pipeline";
@@ -76,6 +79,10 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// Serverless hosting: load the db from Postgres before each request and save it (plus new
+// media files, to Vercel Blob) before the response goes out. No-op when running locally.
+app.use(cloudSyncMiddleware());
+
 // Clients send back the signed file links they were given; keep plain /storage/... paths
 // in the database and in everything the server-side pipeline reads.
 // (Webhooks verify against req.rawBody, which is captured before this runs.)
@@ -95,6 +102,17 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+const MEDIA_MIME: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+  ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".wav": "audio/wav", ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+  ".gif": "image/gif", ".svg": "image/svg+xml",
+};
+function mimeTypeFor(p: string): string {
+  return MEDIA_MIME[path.extname(p).toLowerCase()] || "application/octet-stream";
+}
 
 // Robust Media Streaming Handler with HTTP 206 Range, MIME resolution, and CORS
 const streamMediaFile = (filePath: string, req: express.Request, res: express.Response) => {
@@ -211,6 +229,11 @@ async function serveSignedStorageFile(storagePath: string, query: Record<string,
     return storageAccessDenied(res, check.reason);
   }
   if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
+    // Not on this instance's disk: stream it from cloud storage (Vercel Blob).
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (await streamFromBlob(safePath, req, res, mimeTypeFor(safePath))) return;
     return res.status(404).json({ success: false, error: "Media file not found." });
   }
   res.setHeader("Cache-Control", "private, max-age=3600");
@@ -932,6 +955,70 @@ app.post(
   (req: any, res: any) => handleUploadedFiles(req, res)
 );
 
+// Direct-to-cloud uploads (Vercel): function request bodies are capped at 4.5 MB, so the
+// browser uploads each file straight to Vercel Blob (incoming/<userId>/...), then asks
+// /api/upload/from-blob to import it. Locally the classic multipart /api/upload is used.
+app.get("/api/upload/config", (req: any, res: any) => {
+  res.json({ success: true, direct: cloudEnabled });
+});
+
+const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+app.post("/api/blob/upload", async (req: any, res: any) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const userId = currentUserId(req);
+  if (!userId) return res.status(401).json({ success: false, error: "Please sign in to continue." });
+  try {
+    const result = await handleUpload({
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async (pathname: string) => {
+        if (!pathname.startsWith(`incoming/${userId}/`)) throw new Error("Invalid upload path.");
+        return {
+          allowedContentTypes: ["video/*", "audio/*", "image/*", "application/octet-stream"],
+          maximumSizeInBytes: UPLOAD_MAX_BYTES,
+          addRandomSuffix: true,
+        };
+      },
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || "Upload could not be started." });
+  }
+});
+
+app.post("/api/upload/from-blob", async (req: any, res: any) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const userId = currentUserId(req);
+  const list: any[] = Array.isArray(req.body?.files) ? req.body.files.slice(0, 20) : [];
+  if (!list.length) return res.status(400).json({ success: false, error: "No media files provided." });
+  const files: any[] = [];
+  try {
+    for (const f of list) {
+      const pathname = String(f?.pathname || "");
+      if (!pathname.startsWith(`incoming/${userId}/`) || pathname.includes("..")) {
+        return res.status(403).json({ success: false, error: "That upload doesn't belong to you." });
+      }
+      const blob: any = await getBlob(pathname, { access: "private", useCache: false });
+      if (!blob || blob.statusCode !== 200 || !blob.stream) {
+        return res.status(404).json({ success: false, error: "Upload not found. Please try again." });
+      }
+      if (Number(blob.blob?.size || 0) > UPLOAD_MAX_BYTES) return res.status(413).json({ success: false, error: "File is larger than 2 GB." });
+      const originalname = String(f?.originalname || path.basename(pathname)).slice(0, 200);
+      const safe = originalname.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
+      const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${safe}`);
+      const { Readable } = await import("stream");
+      const { pipeline } = await import("stream/promises");
+      await pipeline(Readable.fromWeb(blob.stream), fs.createWriteStream(filePath));
+      await delBlob(pathname).catch(() => {});
+      files.push({ originalname, path: filePath, size: fs.statSync(filePath).size, mimetype: String(blob.blob?.contentType || f?.mimetype || "") });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || "Couldn't import the upload." });
+  }
+  req.files = files;
+  return handleUploadedFiles(req, res);
+});
+
 // Import a video from a direct link (e.g. https://.../video.mp4) and run the same clip pipeline.
 // Platform pages (YouTube/TikTok) are not supported without a downloader.
 app.post("/api/upload/from-url", async (req: any, res: any) => {
@@ -1163,6 +1250,7 @@ function deleteUserMedia(userId: string, ids: string[]): number {
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
       const thumb = path.join(STORAGE_DIRS.thumbnails, `${name}.jpg`);
       if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
+      void deleteFromBlob([fp, thumb]);
       if (db.fileOwners) { delete db.fileOwners[name]; delete db.fileOwners[`${name}.jpg`]; }
     } catch (e: any) {
       console.warn("media file cleanup failed:", e?.message);
@@ -3894,4 +3982,8 @@ async function startServer() {
   });
 }
 
-startServer();
+// On Vercel the app is served by a function (api/index); everything else (static files,
+// job pollers) runs only for the long-lived local server.
+if (!process.env.VERCEL) startServer();
+
+export { app };
