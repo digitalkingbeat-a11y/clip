@@ -31,6 +31,15 @@ export interface TimedCaptionWord {
   end: number;   // in seconds
 }
 
+export interface AudioMixClip {
+  localPath: string;
+  startTime: number; // timeline seconds
+  sourceStartTime?: number; // in-point inside the source file
+  duration: number; // timeline seconds
+  volume?: number; // 0..2 gain
+  speed?: number;
+}
+
 export interface RenderOptions {
   trimStart?: number;
   trimEnd?: number;
@@ -44,6 +53,12 @@ export interface RenderOptions {
     opacity?: number;
   };
   isTestRender?: boolean;
+  /** Timeline time (seconds) that output t=0 corresponds to. */
+  timelineStart?: number;
+  /** Gain for the video's own audio (0 = silent, 1 = unchanged). */
+  videoVolume?: number;
+  /** Clips from audio tracks to mix in (resolved to local files server-side). */
+  audioClips?: AudioMixClip[];
   scenes?: {
     sceneNumber: number;
     duration: number;
@@ -668,6 +683,92 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     fs.writeFileSync(assPath, content, "utf-8");
   }
 
+  async audioChannels(file: string): Promise<number> {
+    try {
+      const { stdout } = await execFileAsync(this.ffprobePath || "ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0", file]);
+      return parseInt(String(stdout).trim(), 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async probeDuration(file: string): Promise<number> {
+    try {
+      const { stdout } = await execFileAsync(this.ffprobePath || "ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]);
+      const d = parseFloat(String(stdout).trim());
+      return Number.isFinite(d) ? d : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Mix audio-track clips into a rendered video. Each clip is trimmed to its in-point and
+   * length, gain-adjusted and delayed to its timeline position (relative to `timelineStart`),
+   * then summed with the video's own audio. The picture is stream-copied.
+   * Returns false when there was nothing to mix (the file is left untouched).
+   */
+  async mixAudioClips(videoPath: string, clips: AudioMixClip[], timelineStart = 0, videoVolume = 1): Promise<boolean> {
+    const outDur = await this.probeDuration(videoPath);
+    if (!outDur) throw new Error("Couldn't read the rendered video's length.");
+    const usable: Array<{ c: AudioMixClip; ss: number; t: number; delay: number; tempo: number }> = [];
+    for (const c of clips || []) {
+      if (!c?.localPath || !fs.existsSync(c.localPath)) continue;
+      const gain = Number.isFinite(c.volume as number) ? Math.max(0, Math.min(2, c.volume as number)) : 1;
+      if (gain <= 0) continue;
+      const tempo = Math.max(0.5, Math.min(2, c.speed || 1));
+      let relStart = c.startTime - timelineStart; // where it starts in the output
+      let inPoint = Math.max(0, c.sourceStartTime || 0);
+      let len = Math.max(0, c.duration);
+      if (relStart < 0) {
+        // Clip began before the export window: skip its first part.
+        inPoint += -relStart * tempo;
+        len += relStart;
+        relStart = 0;
+      }
+      len = Math.min(len, outDur - relStart);
+      if (len <= 0.01 || relStart >= outDur) continue;
+      usable.push({ c: { ...c, volume: gain }, ss: inPoint, t: len * tempo, delay: relStart, tempo });
+    }
+    if (usable.length === 0 && videoVolume === 1) return false;
+
+    const hasBase = await this.hasAudioStream(videoPath);
+    const args: string[] = ["-y", "-i", videoPath];
+    for (const u of usable) args.push("-ss", u.ss.toFixed(3), "-t", u.t.toFixed(3), "-i", u.c.localPath);
+    if (!hasBase) args.push("-f", "lavfi", "-t", outDur.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo");
+    // Mono sources are duplicated to both channels at full level (a plain stereo upmix would drop them 3 dB).
+    const fmtFor = async (file: string | null) => {
+      const mono = file ? (await this.audioChannels(file)) === 1 : false;
+      return `${mono ? "pan=stereo|c0=c0|c1=c0," : ""}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo`;
+    };
+    const parts: string[] = [];
+    const baseIn = hasBase ? "0:a" : `${usable.length + 1}:a`;
+    parts.push(`[${baseIn}]${await fmtFor(hasBase ? videoPath : null)},volume=${Math.max(0, Math.min(2, videoVolume)).toFixed(3)},apad=whole_dur=${outDur.toFixed(3)}[base]`);
+    const labels = ["[base]"];
+    for (const [i, u] of usable.entries()) {
+      const ms = Math.round(u.delay * 1000);
+      const tempo = Math.abs(u.tempo - 1) > 0.001 ? `,atempo=${u.tempo.toFixed(3)}` : "";
+      parts.push(`[${i + 1}:a]${await fmtFor(u.c.localPath)}${tempo},volume=${(u.c.volume as number).toFixed(3)},adelay=${ms}|${ms}[a${i}]`);
+      labels.push(`[a${i}]`);
+    }
+    parts.push(`${labels.join("")}amix=inputs=${labels.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.97:level=0:latency=1[mix]`);
+    const tmp = `${videoPath}.mix.mp4`;
+    args.push(
+      "-filter_complex", parts.join(";"),
+      "-map", "0:v", "-map", "[mix]",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+      "-t", outDur.toFixed(3), "-movflags", "+faststart", tmp
+    );
+    try {
+      await execFileAsync(this.ffmpegPath, args, { maxBuffer: 16 * 1024 * 1024 });
+      fs.renameSync(tmp, videoPath);
+      return true;
+    } catch (e) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+      throw e;
+    }
+  }
+
   async hasAudioStream(file: string): Promise<boolean> {
     try {
       const { stdout } = await execFileAsync(this.ffprobePath || "ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file]);
@@ -738,7 +839,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           segArgs.push(
             "-filter_complex",
             hasAudio
-              ? `[0:v]${fit}[v];[0:a]aresample=44100,apad[a]`
+              ? `[0:v]${fit}[v];[0:a]aresample=44100,volume=${Math.max(0, Math.min(2, Number((sc as any).volume ?? 1))).toFixed(3)},apad[a]`
               : `[0:v]${fit}[v]`,
             "-map", "[v]",
             "-map", hasAudio ? "[a]" : "1:a",
