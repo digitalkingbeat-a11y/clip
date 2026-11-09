@@ -1577,6 +1577,22 @@ export interface MediaItem {
   folder?: string;
   uploadedAt?: string;
   createdAt?: string;
+  updatedAt?: string;
+  // MediaBay attributes (stored server-side per user)
+  width?: number;
+  height?: number;
+  rating?: number; // 0 = unrated, 1-5 stars
+  favorite?: boolean;
+  binIds?: string[];
+  source?: string;
+  stockAttribution?: { provider?: string; [k: string]: any };
+}
+
+export interface MediaBin {
+  id: string;
+  name: string;
+  parentId?: string | null;
+  createdAt?: string;
 }
 
 export interface Plan {

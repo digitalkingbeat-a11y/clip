@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, Undo2, Redo2, Download, Plus, Split, Type, Gauge, Volume2, Trash2, X, Smartphone, ZoomIn, ZoomOut, Film } from "lucide-react";
+import { Play, Pause, Undo2, Redo2, Download, Plus, Split, Type, Gauge, Volume2, Trash2, X, Smartphone, ZoomIn, ZoomOut, Film, Save } from "lucide-react";
+import { MediaBay } from "./MediaBay";
+import { useTimelineAudio } from "../hooks/useTimelineAudio";
 import { AspectRatio, BrandKit, TimelineItem, TimelineTrack, Project, MediaItem, TrackType } from "../types";
 
 /**
@@ -19,6 +21,8 @@ interface MobileEditorViewProps {
   activeProject?: Project | null;
   mediaLibrary?: MediaItem[];
   onMediaUploaded?: (items: MediaItem[]) => void;
+  onSetMediaLibrary?: (updater: (prev: MediaItem[]) => MediaItem[]) => void;
+  onSaveProject?: () => Promise<Project | null>;
 }
 
 type Sheet = null | "add" | "text" | "speed" | "volume";
@@ -51,7 +55,11 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   activeProject,
   mediaLibrary = [],
   onMediaUploaded,
+  onSetMediaLibrary,
+  onSaveProject,
 }) => {
+  const [isImporting, setIsImporting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -74,6 +82,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   const totalDuration = Math.max(0, ...items.map((it) => it.startTime + it.duration));
   const timelineSeconds = Math.max(15, Math.ceil(totalDuration + 5));
   const selected = items.find((it) => it.id === selectedId) || null;
+  useTimelineAudio({ items, tracks, playhead, playing });
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -251,45 +260,61 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   };
 
   // ---------- Tools ----------
-  const addFile = (file: File) => {
-    const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg)$/i.test(file.name);
-    const isImg = file.type.startsWith("image/");
-    const url = URL.createObjectURL(file);
-    const finish = (dur: number) => {
-      const kind = isAudio ? "audio" : "visual";
-      const trackId = trackFor(kind);
-      const laneEnd = Math.max(0, ...itemsRef.current.filter((x) => x.trackId === trackId).map((x) => x.startTime + x.duration));
-      const it: TimelineItem = {
-        id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        trackId, name: file.name, type: isAudio ? "music" : isImg ? "image" : "video",
-        startTime: round2(isAudio ? playhead : laneEnd), duration: round2(dur), sourceStartTime: 0, sourceUrl: url,
-        volume: 100, speed: 1, ...(isImg ? {} : { sourceDuration: dur }),
-      } as TimelineItem;
-      commit([...itemsRef.current, it]);
-      setSelectedId(it.id);
-      setSheet(null);
-      onMediaUploaded?.([{ id: `media_${Date.now()}`, name: file.name, type: isAudio ? "audio" : isImg ? "image" : "video", size: `${(file.size / 1048576).toFixed(1)} MB`, duration: dur, url, uploadedAt: "Just now" } as MediaItem]);
-    };
-    if (isImg) return finish(5);
-    const probe = document.createElement(isAudio ? "audio" : "video");
-    probe.preload = "metadata";
-    probe.onloadedmetadata = () => finish(Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 5);
-    probe.onerror = () => showToast("This file can't be played in the browser.");
-    probe.src = url;
+  // Files go into the user's server library first (so they survive reloads and can be exported).
+  const uploadFiles = async (files: File[]): Promise<MediaItem[]> => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name);
+    const res = await fetch("/api/upload?library=1", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error("Sign in to import media.");
+    if (!res.ok || !data?.success) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);
+    return Array.isArray(data.mediaItems) ? data.mediaItems : [];
+  };
+  const importFiles = async (files: File[], place: boolean) => {
+    if (!files.length) return;
+    setIsImporting(true);
+    showToast(`Importing ${files.length} file${files.length > 1 ? "s" : ""}…`);
+    try {
+      const uploaded = await uploadFiles(files);
+      onMediaUploaded?.(uploaded);
+      if (place) for (const m of uploaded) addFromLibrary(m);
+      else showToast(`Imported ${uploaded.length} item${uploaded.length > 1 ? "s" : ""}`);
+    } catch (e: any) {
+      showToast(e?.message || "Import failed");
+    } finally {
+      setIsImporting(false);
+    }
+  };
+  const addFile = (file: File) => importFiles([file], true);
+
+  const save = async () => {
+    if (!onSaveProject || isSaving) return;
+    setIsSaving(true);
+    try {
+      const p = await onSaveProject();
+      showToast(p ? "Project saved" : "Couldn't save the project");
+    } catch (e: any) {
+      showToast(`Couldn't save: ${e?.message || "error"}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const addFromLibrary = (m: MediaItem) => {
     const isAudio = m.type === "audio";
     const trackId = trackFor(isAudio ? "audio" : "visual");
+    const items = itemsRef.current;
     const laneEnd = Math.max(0, ...items.filter((x) => x.trackId === trackId).map((x) => x.startTime + x.duration));
     const dur = Number(m.duration) || 5;
     const it = {
-      id: `item_${Date.now()}`, trackId, name: m.name, type: isAudio ? "music" : m.type === "image" ? "image" : "video",
+      id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, trackId, name: m.name, type: isAudio ? "music" : m.type === "image" ? "image" : "video",
       startTime: round2(isAudio ? playhead : laneEnd), duration: dur, sourceStartTime: 0, sourceUrl: m.url, volume: 100, speed: 1, sourceDuration: dur,
     } as TimelineItem;
     commit([...items, it]);
+    itemsRef.current = [...items, it];
     setSelectedId(it.id);
     setSheet(null);
+    showToast(`Added "${m.name}" at ${fmt(it.startTime)}`);
   };
 
   const addText = () => {
@@ -381,6 +406,11 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
         <button type="button" onClick={() => onSetAspectRatio(RATIOS[(ratioIndex + 1) % RATIOS.length])} aria-label="Change aspect ratio" className="h-10 px-2.5 rounded-lg border border-[#272D3A] text-xs font-bold text-gray-200 active:bg-white/10">
           {aspectRatio}
         </button>
+        {onSaveProject && (
+          <button type="button" id="btn-mobile-save" onClick={save} disabled={isSaving} aria-label="Save project" className="w-10 h-10 flex items-center justify-center rounded-lg text-gray-300 disabled:opacity-40 active:bg-white/10">
+            <Save className="w-5 h-5" />
+          </button>
+        )}
         <button type="button" id="btn-mobile-export" onClick={onOpenExportModal} disabled={!items.length} className="h-10 px-3 rounded-lg btn-clipflow-primary text-sm font-bold flex items-center gap-1.5 disabled:opacity-40">
           <Download className="w-4 h-4" /> Export
         </button>
@@ -515,7 +545,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
       {/* Bottom sheets */}
       {sheet && (
         <div className="fixed inset-0 z-50 bg-black/50 flex flex-col justify-end" onClick={closeSheet}>
-          <div className="bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl p-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 max-h-[60vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[#0E121C] border-t border-[#232A3B] rounded-t-2xl p-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] space-y-3 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <span className="text-sm font-bold">
                 {sheet === "add" ? "Add to timeline" : sheet === "text" ? "Text" : sheet === "speed" ? "Speed" : "Volume"}
@@ -529,14 +559,16 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
                   <button type="button" onClick={() => fileRef.current?.click()} className="h-12 rounded-xl border border-[#168CFF]/50 bg-[#168CFF]/10 text-sm font-semibold flex items-center justify-center gap-2"><Smartphone className="w-4 h-4" /> Video or photo</button>
                   <button type="button" onClick={() => audioFileRef.current?.click()} className="h-12 rounded-xl border border-[#272D3A] bg-[#171E2D] text-sm font-semibold flex items-center justify-center gap-2"><Volume2 className="w-4 h-4" /> Audio</button>
                 </div>
-                {mediaLibrary.length > 0 && (
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-gray-400 font-semibold">From your library</p>
-                    {mediaLibrary.slice(0, 8).map((m) => (
-                      <button key={m.id} type="button" onClick={() => addFromLibrary(m)} className="w-full h-11 px-3 rounded-lg bg-[#141A26] border border-[#232A3B] text-left text-sm truncate">{m.name}</button>
-                    ))}
-                  </div>
-                )}
+                <div className="h-[58vh] rounded-xl overflow-hidden border border-[#232A3B]">
+                  <MediaBay
+                    layout="mobile"
+                    items={mediaLibrary}
+                    setItems={(fn) => onSetMediaLibrary?.(fn)}
+                    onAdd={addFromLibrary}
+                    onImportFiles={(files) => importFiles(files, false)}
+                    isImporting={isImporting}
+                  />
+                </div>
               </div>
             )}
 

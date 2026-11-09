@@ -67,6 +67,7 @@ import {
 import { Plus, Scissors, Sparkles, Film, ArrowRight, Play, Cpu, AlertCircle, RefreshCw, CheckCircle, Info, X, Radio, LayoutTemplate } from "lucide-react";
 import { MobileBottomNav } from "./components/MobileBottomNav";
 import { MobileEditorView } from "./components/MobileEditorView";
+import { ensureTracksForItems } from "./utils/trackUtils";
 import { PWAInstallModal } from "./components/PWAInstallModal";
 import { OfflineNotice } from "./components/OfflineNotice";
 import { usePWAInstall } from "./hooks/usePWAInstall";
@@ -348,7 +349,8 @@ export default function App() {
       const saved = localStorage.getItem("clipflow_media_library");
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        // Temporary browser links (blob:) never survive a reload, so they're dropped.
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed.filter((m: any) => m?.url && !String(m.url).startsWith("blob:"));
       }
     } catch {}
     return INITIAL_MEDIA_LIBRARY;
@@ -366,24 +368,88 @@ export default function App() {
     syncToServer: true,
   });
 
-  // Load persisted media from backend API if available
+  // The server library is the source of truth for the signed-in user's media.
+  // Reload it whenever the signed-in user changes.
   useEffect(() => {
+    if (!currentUser?.id) {
+      setMediaLibrary([]);
+      return;
+    }
     fetch("/api/media")
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.media) && data.media.length > 0) {
-          setMediaLibrary((prev) => {
-            const existingIds = new Set(data.media.map((m: any) => m.id));
-            const remainingInitial = prev.filter((m) => !existingIds.has(m.id));
-            return [...data.media, ...remainingInitial];
-          });
-        }
+        if (data.success && Array.isArray(data.media)) setMediaLibrary(data.media);
       })
       .catch((err) => console.warn("Failed to fetch media list:", err));
-  }, []);
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.projects)) {
+          setProjects(data.projects);
+          setActiveProject((prev) => (prev ? data.projects.find((p: any) => p.id === prev.id) || null : null));
+        }
+      })
+      .catch(() => {});
+  }, [currentUser?.id]);
 
   const handleMediaAssetsAdded = (newItems: MediaItem[]) => {
-    setMediaLibrary((prev) => [...newItems, ...prev]);
+    setMediaLibrary((prev) => {
+      const ids = new Set(newItems.map((m) => m.id));
+      return [...newItems, ...prev.filter((m) => !ids.has(m.id))];
+    });
+  };
+
+  // Every timeline item needs a track it can be drawn on; add any standard track that's missing.
+  useEffect(() => {
+    const next = ensureTracksForItems(timelineTracks, timelineItems);
+    if (next) setTimelineTracks(next);
+  }, [timelineItems, timelineTracks]);
+
+  /**
+   * Save the editor timeline to the server. Timeline projects are updated in place;
+   * anything else (no project yet, or an AI Clips/AI Video project) gets a new editor project.
+   */
+  const handleSaveEditorProject = async (): Promise<Project | null> => {
+    const firstVisual = timelineItems
+      .filter((it) => (it.type === "video" || it.type === "broll" || it.type === "image") && it.sourceUrl)
+      .sort((a, b) => a.startTime - b.startTime)[0];
+    const lib = firstVisual ? mediaLibrary.find((m) => (m.url || "").split("?")[0] === (firstVisual.sourceUrl || "").split("?")[0]) : undefined;
+    const duration = timelineItems.reduce((mx, it) => Math.max(mx, (it.startTime || 0) + (it.duration || 0)), 0);
+    const body: any = {
+      name: activeProject?.name || "Untitled project",
+      aspectRatio,
+      timelineTracks,
+      timelineItems,
+      duration: Math.round(duration * 100) / 100,
+      clipsCount: timelineItems.length,
+      sourceVideoUrl: firstVisual?.sourceUrl || "",
+      sourceThumbnail: lib?.thumbnail || (firstVisual?.type === "image" ? firstVisual.sourceUrl : "") || "",
+    };
+    const canUpdate = !!activeProject && activeProject.type !== "clipper" && activeProject.type !== "ai_generated";
+    const send = async (method: "PUT" | "POST", url: string) => {
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+    let { res, data } = canUpdate ? await send("PUT", `/api/projects/${encodeURIComponent(activeProject!.id)}`) : await send("POST", "/api/projects");
+    if (canUpdate && res.status === 404) ({ res, data } = await send("POST", "/api/projects"));
+    if (res.status === 401) throw new Error("sign in first");
+    if (!res.ok || !data?.success || !data.project) throw new Error(data?.error || `HTTP ${res.status}`);
+    const saved: Project = data.project;
+    setActiveProject(saved);
+    setProjects((prev) => [saved, ...prev.filter((p) => p.id !== saved.id && p.id !== activeProject?.id)]);
+    return saved;
+  };
+
+  const openProject = (p: Project) => {
+    setActiveProject(p);
+    if (p.type === "clipper") return setCurrentView("ai_clips");
+    if (p.type === "ai_generated") return setCurrentView("ai_video");
+    // Opening a project shows exactly its saved timeline (never the previous one).
+    setTimelineTracks(p.timelineTracks && p.timelineTracks.length > 0 ? p.timelineTracks : INITIAL_TIMELINE_TRACKS);
+    setTimelineItems(Array.isArray(p.timelineItems) ? p.timelineItems : []);
+    if (p.aspectRatio) setAspectRatio(p.aspectRatio as AspectRatio);
+    setCurrentView("editor");
   };
 
   // Fetch initial project/clips from backend if available
@@ -805,7 +871,7 @@ export default function App() {
     const newItems: TimelineItem[] = [
       {
         id: `item_${media.id}`,
-        trackId: isAudio ? "track_music" : media.type === "broll" ? "track_broll" : "track_video",
+        trackId: isAudio ? "track_voice" : media.type === "broll" ? "track_broll" : "track_video",
         name: media.name,
         type: isAudio ? "music" : (media.type as any),
         startTime: 0,
@@ -1326,18 +1392,7 @@ export default function App() {
               clips={clips}
               scheduledPosts={scheduledPosts}
               onNavigate={(v) => setCurrentView(v)}
-              onSelectProject={(p) => {
-                setActiveProject(p);
-                if (p.timelineTracks && p.timelineTracks.length > 0) {
-                  setTimelineTracks(p.timelineTracks);
-                }
-                if (p.timelineItems && p.timelineItems.length > 0) {
-                  setTimelineItems(p.timelineItems);
-                }
-                if (p.type === "clipper") setCurrentView("ai_clips");
-                else if (p.type === "ai_generated") setCurrentView("ai_video");
-                else setCurrentView("editor");
-              }}
+              onSelectProject={(p) => openProject(p)}
               onOpenClip={(c) => {
                 handleOpenClipInEditor(c);
               }}
@@ -1636,6 +1691,8 @@ export default function App() {
                   activeProject={activeProject}
                   mediaLibrary={mediaLibrary}
                   onMediaUploaded={handleMediaAssetsAdded}
+                  onSetMediaLibrary={setMediaLibrary}
+                  onSaveProject={handleSaveEditorProject}
                 />
                 ) : (
                 <TimelineEditor
@@ -1650,6 +1707,8 @@ export default function App() {
                   clips={clips}
                   mediaLibrary={mediaLibrary}
                   onMediaUploaded={handleMediaAssetsAdded}
+                  onSetMediaLibrary={setMediaLibrary}
+                  onSaveProject={handleSaveEditorProject}
                   onUpdateProject={(proj) => {
                     setActiveProject(proj);
                     setProjects((prev) => prev.map((p) => (p.id === proj.id ? proj : p)));
@@ -1741,21 +1800,7 @@ export default function App() {
                   {projects.map((proj) => (
                     <div
                       key={proj.id}
-                      onClick={() => {
-                        setActiveProject(proj);
-                        if (proj.timelineTracks && proj.timelineTracks.length > 0) {
-                          setTimelineTracks(proj.timelineTracks);
-                        }
-                        if (proj.timelineItems && proj.timelineItems.length > 0) {
-                          setTimelineItems(proj.timelineItems);
-                        }
-                        if (proj.aspectRatio) {
-                          setAspectRatio(proj.aspectRatio as AspectRatio);
-                        }
-                        if (proj.type === "clipper") setCurrentView("ai_clips");
-                        else if (proj.type === "ai_generated") setCurrentView("ai_video");
-                        else setCurrentView("editor");
-                      }}
+                      onClick={() => openProject(proj)}
                       className="bg-[#11151E] border border-[#272D3A] hover:border-[#168CFF]/50 rounded-xl p-3 cursor-pointer group transition-all"
                     >
                       <div className="aspect-video bg-black rounded-lg overflow-hidden relative mb-2">
@@ -2120,7 +2165,7 @@ export default function App() {
         onClose={() => setIsExportModalOpen(false)}
         aspectRatio={aspectRatio}
         projectName={activeProject?.name || "ClipFlow Video Project"}
-        projectId={activeProject?.id || "proj_podcast_01"}
+        projectId={activeProject?.id || ""}
         activeClip={clips[0]}
         brandKit={brandKit}
         timelineItems={timelineItems}
