@@ -7,7 +7,6 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 
 import { initStorage, readDb, writeDb, STORAGE_DIRS } from "./server/storage";
 import { ffmpegService } from "./server/ffmpeg";
@@ -42,7 +41,7 @@ import { affiliateService } from "./server/affiliateService";
 import { googleCalendarService } from "./server/googleCalendarService";
 import { googleAnalyticsService } from "./server/googleAnalyticsService";
 import { podcastService, PodcastError } from "./server/podcastService";
-import { stockFootageService, stockAvailable, STOCK_CONFIG } from "./server/stockFootageService";
+import { stockFootageService, stockAvailable, STOCK_CONFIG, PROVIDER_INFO, activeStockProvider, enabledStockProviders } from "./server/stockFootageService";
 import { veoJobService, createGenAIVeoProvider, VEO_CONFIG, veoCreditsFor, veoDurationFor } from "./server/veoService";
 import crypto from "crypto";
 import { runninghubJobService, listVideoProviders, generateVideo, getVideoJobs } from "./server/videoGeneration";
@@ -979,6 +978,7 @@ async function handleUploadedFiles(req: any, res: any) {
     }
 
     const userId = currentUserId(req);
+    const libraryOnly = String(req.query?.library || "") === "1";
     const createdProjects: any[] = [];
     const createdJobs: any[] = [];
     const createdMediaItems: any[] = [];
@@ -992,13 +992,18 @@ async function handleUploadedFiles(req: any, res: any) {
       const mediaType: "video" | "audio" | "image" | "broll" = isBroll ? "broll" : isAudio ? "audio" : isImage ? "image" : "video";
 
       let duration = 0;
-      if (!isImage) {
-        try {
-          const probe = await ffmpegService.probeMedia(file.path);
-          duration = probe.duration || 0;
-        } catch (e) {
-          // Probe fallback
+      let width: number | undefined;
+      let height: number | undefined;
+      try {
+        const probe: any = await ffmpegService.probeMedia(file.path);
+        if (!isImage) duration = probe.duration || 0;
+        // ffprobe reports a default size when there's no picture stream, so audio gets none.
+        if (!isAudio && probe.width && probe.height) {
+          width = Number(probe.width);
+          height = Number(probe.height);
         }
+      } catch (e) {
+        // Probe fallback
       }
 
       let realThumb: string | undefined;
@@ -1016,19 +1021,25 @@ async function handleUploadedFiles(req: any, res: any) {
         name: file.originalname,
         type: mediaType,
         format: ext.replace(".", "").toLowerCase(),
-        duration: Math.round(duration),
+        duration: Math.round(duration * 100) / 100,
+        width,
+        height,
         sizeBytes: file.size,
         url: `/storage/uploads/${safeBaseName}`,
         thumbnail: isImage
           ? `/storage/uploads/${safeBaseName}`
           : realThumb,
-        tags: ["upload", mediaType],
-        createdAt: new Date().toISOString().split("T")[0],
+        tags: [] as string[],
+        rating: 0,
+        favorite: false,
+        binIds: [] as string[],
+        createdAt: new Date().toISOString(),
       };
       createdMediaItems.push(mediaItem);
 
-      // If video, also spin up project and background pipeline
-      if (mediaType === "video" || mediaType === "broll") {
+      // Editor/MediaBay imports (?library=1) only add the file to the library. Other uploads
+      // of a video also spin up an AI Clips project and its background pipeline.
+      if (!libraryOnly && (mediaType === "video" || mediaType === "broll")) {
         const projectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         const newProject = {
@@ -1105,19 +1116,77 @@ app.get("/api/media", (req: any, res) => {
   res.json({ success: true, media: (db.media || []).filter(ownedBy(req)) });
 });
 
-app.delete("/api/media/:id", (req: any, res) => {
-  const db = readDb();
-  if (db.media) {
-    db.media = db.media.filter((m: any) => !(m.id === req.params.id && m.userId === currentUserId(req)));
-    writeDb(db);
+// Library item fields a user may change (MediaBay metadata). Everything else is server-owned.
+const MEDIA_EDITABLE_FIELDS = ["name", "tags", "rating", "favorite", "binIds", "folder", "duration", "width", "height"];
+function sanitizeMediaUpdates(body: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (!body || typeof body !== "object") return out;
+  for (const k of MEDIA_EDITABLE_FIELDS) {
+    if (!(k in body)) continue;
+    const v = body[k];
+    if (k === "name") {
+      const n = String(v ?? "").trim().slice(0, 200);
+      if (n) out.name = n;
+    } else if (k === "tags") {
+      if (Array.isArray(v)) out.tags = Array.from(new Set(v.map((t: any) => String(t).trim().slice(0, 40)).filter(Boolean))).slice(0, 30);
+    } else if (k === "rating") {
+      const r = Math.round(Number(v));
+      if (Number.isFinite(r)) out.rating = Math.max(0, Math.min(5, r));
+    } else if (k === "favorite") {
+      out.favorite = !!v;
+    } else if (k === "binIds") {
+      if (Array.isArray(v)) out.binIds = Array.from(new Set(v.map((b: any) => String(b)).filter((b: string) => /^bin_[a-z0-9_]{1,40}$/i.test(b)))).slice(0, 50);
+    } else if (k === "folder") {
+      out.folder = v ? String(v).slice(0, 80) : undefined;
+    } else if (k === "duration" || k === "width" || k === "height") {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0 && n < 1e6) out[k] = k === "duration" ? Math.round(n * 100) / 100 : Math.round(n);
+    }
   }
+  return out;
+}
+
+/** Remove a user's library records. Upload files are only deleted from disk when no project uses them. */
+function deleteUserMedia(userId: string, ids: string[]): number {
+  const db = readDb();
+  if (!db.media || ids.length === 0) return 0;
+  const doomed = db.media.filter((m: any) => m.userId === userId && ids.includes(m.id));
+  if (doomed.length === 0) return 0;
+  db.media = db.media.filter((m: any) => !doomed.includes(m));
+  const projectJson = JSON.stringify((db.projects || []).filter((p: any) => p.userId === userId));
+  for (const m of doomed) {
+    const name = typeof m.url === "string" ? path.basename(m.url.split("?")[0]) : "";
+    if (!name || !m.url.startsWith("/storage/uploads/") || projectJson.includes(name)) continue;
+    if (db.fileOwners?.[name] && db.fileOwners[name] !== userId) continue;
+    try {
+      const fp = path.join(STORAGE_DIRS.uploads, name);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+      const thumb = path.join(STORAGE_DIRS.thumbnails, `${name}.jpg`);
+      if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
+      if (db.fileOwners) { delete db.fileOwners[name]; delete db.fileOwners[`${name}.jpg`]; }
+    } catch (e: any) {
+      console.warn("media file cleanup failed:", e?.message);
+    }
+  }
+  writeDb(db);
+  return doomed.length;
+}
+
+app.delete("/api/media/:id", (req: any, res) => {
+  deleteUserMedia(currentUserId(req), [String(req.params.id)]);
   res.json({ success: true, message: "Media deleted" });
 });
 
-// Update media item metadata (duration, folder, tags, etc.)
+app.post("/api/media/bulk-delete", (req: any, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((x: any) => String(x)).slice(0, 500) : [];
+  const removedCount = deleteUserMedia(currentUserId(req), ids);
+  res.json({ success: true, removedCount });
+});
+
+// Update media item metadata (name, tags, rating, favorite, bins, ...)
 app.patch("/api/media/:id", (req: any, res) => {
   const { id } = req.params;
-  const updates = req.body;
+  const updates = sanitizeMediaUpdates(req.body);
   const db = readDb();
   if (db.media) {
     const itemIndex = db.media.findIndex((m: any) => m.id === id && m.userId === currentUserId(req));
@@ -1135,41 +1204,83 @@ app.patch("/api/media/:id", (req: any, res) => {
 });
 
 app.post("/api/media/cleanup", (req: any, res) => {
-  const { ids } = req.body;
-  const db = readDb();
-  if (Array.isArray(ids) && db.media) {
-    const beforeCount = db.media.length;
-    db.media = db.media.filter((m: any) => !ids.includes(m.id));
-    writeDb(db);
-    return res.json({
-      success: true,
-      message: "Unused media cleaned up successfully",
-      removedCount: beforeCount - db.media.length,
-      remainingCount: db.media.length,
-    });
-  }
-  res.json({ success: true, message: "No items specified", removedCount: 0 });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((x: any) => String(x)) : [];
+  if (ids.length === 0) return res.json({ success: true, message: "No items specified", removedCount: 0 });
+  const removedCount = deleteUserMedia(currentUserId(req), ids);
+  const remainingCount = (readDb().media || []).filter(ownedBy(req)).length;
+  res.json({ success: true, message: "Unused media cleaned up successfully", removedCount, remainingCount });
 });
 
 app.post("/api/media/move-folder", (req: any, res) => {
-  const { ids, folder } = req.body;
+  const { ids, folder } = req.body || {};
   const db = readDb();
+  const uid = currentUserId(req);
   if (Array.isArray(ids) && db.media) {
+    let updatedCount = 0;
     db.media = db.media.map((m: any) => {
-      if (ids.includes(m.id)) {
-        return { ...m, folder: folder === "uncategorized" || !folder ? undefined : folder };
+      if (m.userId === uid && ids.includes(m.id)) {
+        updatedCount++;
+        return { ...m, folder: folder === "uncategorized" || !folder ? undefined : String(folder).slice(0, 80) };
       }
       return m;
     });
     writeDb(db);
     return res.json({
       success: true,
-      message: `Moved ${ids.length} items to folder "${folder || "Uncategorized"}"`,
-      updatedCount: ids.length,
+      message: `Moved ${updatedCount} items to folder "${folder || "Uncategorized"}"`,
+      updatedCount,
       folder: folder || null,
     });
   }
   res.json({ success: true, message: "No items specified", updatedCount: 0 });
+});
+
+// MediaBay bins: user-created folders. Items reference bins through their binIds.
+app.get("/api/media-bins", (req: any, res) => {
+  const db = readDb();
+  res.json({ success: true, bins: (db.mediaBins || []).filter(ownedBy(req)) });
+});
+
+app.post("/api/media-bins", (req: any, res) => {
+  const name = String(req.body?.name || "").trim().slice(0, 60);
+  if (!name) return res.status(400).json({ success: false, error: "Give the bin a name." });
+  const db = readDb();
+  if (!db.mediaBins) db.mediaBins = [];
+  const uid = currentUserId(req);
+  const parentId = typeof req.body?.parentId === "string" && db.mediaBins.some((b: any) => b.id === req.body.parentId && b.userId === uid) ? req.body.parentId : null;
+  if (db.mediaBins.filter((b: any) => b.userId === uid).length >= 200) return res.status(400).json({ success: false, error: "Too many bins." });
+  const bin = { id: `bin_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, userId: uid, name, parentId, createdAt: new Date().toISOString() };
+  db.mediaBins.push(bin);
+  writeDb(db);
+  res.json({ success: true, bin });
+});
+
+app.patch("/api/media-bins/:id", (req: any, res) => {
+  const db = readDb();
+  const bin = (db.mediaBins || []).find((b: any) => b.id === req.params.id && b.userId === currentUserId(req));
+  if (!bin) return res.status(404).json({ success: false, error: "Bin not found" });
+  const name = String(req.body?.name || "").trim().slice(0, 60);
+  if (name) bin.name = name;
+  writeDb(db);
+  res.json({ success: true, bin });
+});
+
+app.delete("/api/media-bins/:id", (req: any, res) => {
+  const db = readDb();
+  const uid = currentUserId(req);
+  const all = (db.mediaBins || []).filter((b: any) => b.userId === uid);
+  const doomed = new Set<string>([String(req.params.id)]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const b of all) if (b.parentId && doomed.has(b.parentId) && !doomed.has(b.id)) { doomed.add(b.id); grew = true; }
+  }
+  db.mediaBins = (db.mediaBins || []).filter((b: any) => !(b.userId === uid && doomed.has(b.id)));
+  for (const m of db.media || []) {
+    if (m.userId === uid && Array.isArray(m.binIds)) m.binIds = m.binIds.filter((x: string) => !doomed.has(x));
+  }
+  writeDb(db);
+  res.json({ success: true, removed: Array.from(doomed) });
 });
 
 // 4. Job Status & Polling Endpoint (Handles page refresh / recovery)
@@ -1228,6 +1339,43 @@ app.get("/api/projects", (req: any, res) => {
   // Return projects owned by this user or projects created in demo/preview
   const userProjects = (db.projects || []).filter((p: any) => userId && p.userId === userId);
   res.json({ success: true, projects: userProjects });
+});
+
+// Create a project from the editor (Save on a timeline that isn't on the server yet).
+const PROJECT_WRITABLE_FIELDS = ["name", "aspectRatio", "timelineTracks", "timelineItems", "duration", "sourceVideoUrl", "sourceThumbnail", "clipsCount"];
+function pickProjectFields(body: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const k of PROJECT_WRITABLE_FIELDS) if (body && k in body) out[k] = body[k];
+  if (typeof out.name === "string") out.name = out.name.trim().slice(0, 120) || "Untitled project";
+  if ("timelineItems" in out && !Array.isArray(out.timelineItems)) delete out.timelineItems;
+  if ("timelineTracks" in out && !Array.isArray(out.timelineTracks)) delete out.timelineTracks;
+  return out;
+}
+app.post("/api/projects", (req: any, res: any) => {
+  const db = readDb();
+  if (!db.projects) db.projects = [];
+  const now = new Date().toISOString();
+  const fields = pickProjectFields(req.body || {});
+  const project = {
+    id: `proj_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    userId: currentUserId(req),
+    name: fields.name || "Untitled project",
+    type: "timeline_custom",
+    status: "ready",
+    duration: 0,
+    aspectRatio: "9:16",
+    sourceVideoUrl: "",
+    sourceThumbnail: "",
+    clipsCount: 0,
+    approvedClipsCount: 0,
+    clips: [],
+    ...fields,
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.projects.unshift(project);
+  writeDb(db);
+  res.json({ success: true, project });
 });
 
 app.get("/api/clips", (req: any, res) => {
@@ -1302,8 +1450,8 @@ app.post("/api/projects/:id/clips/:clipId/captions", (req: any, res) => {
 app.post("/api/render-clip", async (req: any, res) => {
   try {
     const { clipId, projectId, captions, brandKit, options } = req.body;
-    if (!clipId || !projectId) {
-      return res.status(400).json({ success: false, error: "clipId and projectId are required" });
+    if (!clipId) {
+      return res.status(400).json({ success: false, error: "clipId is required" });
     }
 
     const userId = currentUserId(req);
@@ -1311,7 +1459,9 @@ app.post("/api/render-clip", async (req: any, res) => {
     // Timeline exports (e.g. a script sent from AI Video) carry their own scenes
     // and don't need a saved project; store them under an "editor" project key.
     const isSceneExport = Array.isArray(options?.scenes) && options.scenes.length > 0;
-    if (!owned && !isSceneExport) return res.status(404).json({ success: false, error: "Project not found" });
+    // An unsaved editor timeline can still render when its source file is in the user's library.
+    const ownsSource = !!options?.sourceUrl && !!resolveOwnedMediaPath(String(options.sourceUrl), userId, ["uploads", "renders", "clips"]);
+    if (!owned && !isSceneExport && !ownsSource) return res.status(404).json({ success: false, error: "Project not found" });
     const result = await pipelineManager.renderFinalVideo(
       clipId,
       owned ? projectId : "editor",
@@ -2250,10 +2400,12 @@ app.post("/api/ai/render-shot", async (req: any, res) => {
   }
 });
 
-// 4a. Stock footage (free, Pexels). Falls back to a Quick preview card when there's no key or no match.
+// 4a. Stock footage (free, Pixabay or Pexels). Falls back to a Quick preview card when there's no key or no match.
 app.get("/api/ai/stock/config", (req, res) => {
-  res.json({ success: true, available: stockAvailable(), provider: "pexels", creditsPerShot: STOCK_CONFIG.creditsPerShot,
-    creditLine: STOCK_CONFIG.creditLine, creditUrl: STOCK_CONFIG.creditUrl });
+  const provider = activeStockProvider();
+  res.json({ success: true, available: stockAvailable(), provider, providers: enabledStockProviders(), creditsPerShot: STOCK_CONFIG.creditsPerShot,
+    providerLabel: provider ? PROVIDER_INFO[provider].label : null,
+    creditLine: provider ? PROVIDER_INFO[provider].creditLine : null, creditUrl: provider ? PROVIDER_INFO[provider].creditUrl : null });
 });
 app.post("/api/ai/stock/shot", async (req: any, res) => {
   const { shot, aspectRatio, excludeIds } = req.body || {};
@@ -2267,10 +2419,12 @@ app.post("/api/ai/stock/shot", async (req: any, res) => {
     res.json({ success: true, mode: "preview", fallback: true, notice, ...result });
   };
   try {
-    if (!stockAvailable()) return await fallback("Stock footage isn't set up yet (no Pexels API key), so this scene uses a Quick preview card.");
+    if (!stockAvailable()) return await fallback("Stock footage isn't set up yet (no Pixabay or Pexels API key), so this scene uses a Quick preview card.");
     let out: any = null;
     try {
-      out = await stockFootageService.renderShot({ userId, shot, aspectRatio: ar, excludeIds: Array.isArray(excludeIds) ? excludeIds : [], ai: getGenAI() });
+      out = await stockFootageService.renderShot({ userId, shot, aspectRatio: ar, excludeIds: (Array.isArray(excludeIds) ? excludeIds : [])
+        .filter((x: any) => (typeof x === "number" && Number.isFinite(x)) || (typeof x === "string" && /^[a-z]{0,10}:?\d{1,15}$/.test(x)))
+        .slice(0, 300), ai: getGenAI() });
     } catch (e: any) {
       console.warn("stock footage error:", e?.message);
       return await fallback(`Couldn't get stock footage (${e?.message || "error"}), so this scene uses a Quick preview card.`);
@@ -2434,9 +2588,14 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       });
       t += duration;
     }
-    const attributions = shots.map((s: any) => s.stockAttribution).filter((a: any) => a && a.provider === "pexels");
+    const attributions = shots.map((s: any) => s.stockAttribution).filter((a: any) => a && (a.provider === "pexels" || a.provider === "pixabay"));
+    const usedProviders = Array.from(new Set(attributions.map((a: any) => a.provider))) as Array<"pexels" | "pixabay">;
     const credits = attributions.length
-      ? [STOCK_CONFIG.creditLine, ...Array.from(new Set(attributions.map((a: any) => `Video by ${a.videographer} on Pexels`)))]
+      ? [
+          ...usedProviders.map((p) => PROVIDER_INFO[p].creditLine),
+          ...Array.from(new Set(attributions.map((a: any) =>
+            a.creditLine || (a.provider === "pixabay" ? `Video from Pixabay by ${a.videographer}` : `Video by ${a.videographer} on Pexels`)))),
+        ]
       : [];
     const outFileName = `ClipFlow_Master_${Date.now()}.mp4`;
     const outPath = path.join(STORAGE_DIRS.renders, outFileName);
@@ -2461,7 +2620,7 @@ app.post("/api/ai/combine-storyboard", async (req: any, res) => {
       sizeBytes: fs.statSync(outPath).size,
       url: `/storage/renders/${outFileName}`,
       thumbnail: masterThumbnailUrl,
-      tags: ["ai-video", "render", ...(attributions.length ? ["pexels"] : [])],
+      tags: ["ai-video", "render", ...usedProviders],
       ...(attributions.length ? { attribution: attributions, credits } : {}),
       createdAt: new Date().toISOString().split("T")[0],
     });
@@ -3684,6 +3843,8 @@ async function startServer() {
 
   if (!isProduction) {
     try {
+      // Keep the production server bundle independent of the dev-only Vite package.
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",

@@ -243,7 +243,7 @@ export const ProgramMonitorPanel: React.FC<ProgramMonitorPanelProps> = ({
             onClick={onToggleSafeZones}
             className={`h-5 px-1.5 rounded text-[10px] flex items-center gap-1 cursor-pointer transition-colors ${
               showSafeZones
-                ? "bg-[#168CFF]/20 text-[#16D9F5] border border-[#16D9F5]/40"
+                ? "bg-[#242A36] text-[#D7DCE5] border border-[#3A4351] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
                 : "bg-[#141A25] text-gray-400 hover:text-white border border-[#212735]"
             }`}
             title="Toggle Title/Action Safe Zones (90%/80%)"
@@ -447,12 +447,12 @@ export const ProgramMonitorPanel: React.FC<ProgramMonitorPanelProps> = ({
             {showSafeZones && (
               <div className="absolute inset-0 pointer-events-none z-30 select-none">
                 {/* 90% Action Safe Border */}
-                <div className="absolute inset-[5%] border border-[#16D9F5]/40 border-dashed rounded-xs" />
+                <div className="absolute inset-[5%] border border-white/20 border-dashed rounded-xs" />
                 {/* 80% Title Safe Border */}
-                <div className="absolute inset-[10%] border border-[#933CFF]/50 rounded-xs flex items-center justify-center">
+                <div className="absolute inset-[10%] border border-white/10 rounded-xs flex items-center justify-center">
                   {/* Center Crosshairs */}
-                  <div className="w-4 h-px bg-white/40" />
-                  <div className="h-4 w-px bg-white/40 absolute" />
+                  <div className="w-4 h-px bg-white/25" />
+                  <div className="h-4 w-px bg-white/25 absolute" />
                 </div>
               </div>
             )}

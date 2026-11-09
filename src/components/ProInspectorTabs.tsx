@@ -483,8 +483,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("transform")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "transform"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Transform, Position, Rotation, Crop"
         >
@@ -494,8 +494,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("typography")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "typography"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Text, Font, Size, Colors, Kinetic Captions"
         >
@@ -505,8 +505,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("color")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "color"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Color Correction, Exposure, Contrast, LUTs"
         >
@@ -516,8 +516,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("effects")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "effects" || activeTab === "shapes"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Visual Effects, Blend Modes, Chroma Key, Transitions"
         >
@@ -527,8 +527,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("audio")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "audio"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Volume, Speed, Pitch Shift, EQ, Fades"
         >
@@ -538,8 +538,8 @@ export const ProInspectorTabs: React.FC<ProInspectorProps> = ({
           onClick={() => setActiveTab("keyframes")}
           className={`py-1 rounded text-center transition-colors cursor-pointer ${
             activeTab === "keyframes"
-              ? "bg-[#168CFF] text-white shadow-xs"
-              : "text-gray-400 hover:text-white"
+              ? "bg-[#242A36] text-[#E3E6EB] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
+              : "text-[#8B94A3] hover:bg-[#1D2330] hover:text-[#D7DCE5]"
           }`}
           title="Keyframe Animations"
         >

@@ -57,6 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isDrawer = false,
   onClose,
   plan,
+  isAdmin = false,
   subscription,
   allowance,
   creditBalance,
@@ -66,7 +67,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenCreatorProgram,
   onOpenTikTokAds,
   onOpenInstall,
-  isAdmin = false,
 }) => {
   const { t } = useLanguage();
 

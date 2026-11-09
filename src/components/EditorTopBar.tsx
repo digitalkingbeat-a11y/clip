@@ -588,10 +588,10 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
                 className="w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between hover:bg-[#1E2535] text-gray-200 cursor-pointer"
               >
                 <span className="flex items-center gap-2">
-                  <Eye className="w-3.5 h-3.5 text-[#168CFF]" />
+                  <Eye className="w-3.5 h-3.5 text-[#9AA4B2]" />
                   <span>Safe Zones (90%/80%)</span>
                 </span>
-                <span className="text-[9px] font-mono text-gray-400">{showSafeZones ? "ON" : "OFF"}</span>
+                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${showSafeZones ? "bg-[#2B3341] text-[#D7DCE5]" : "bg-black/40 text-gray-400"}`}>{showSafeZones ? "ON" : "OFF"}</span>
               </button>
               <button
                 onClick={() => {

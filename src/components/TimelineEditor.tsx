@@ -137,6 +137,9 @@ import { SourceMonitorPanel, SourceMediaItem } from "./SourceMonitorPanel";
 import { TransitionPopover } from "./TransitionPopover";
 import { mediaDiagnostics } from "../utils/mediaDiagnostics";
 import { extractMediaMetadata } from "../utils/mediaStore";
+import { MediaBay } from "./MediaBay";
+import { useTimelineAudio } from "../hooks/useTimelineAudio";
+import { resolveTrackForMedia, mediaKindOf, itemTypeFor, MediaKind } from "../utils/trackUtils";
 import {
   EditorWorkspaceLayout,
   CustomSavedWorkspaceLayout,
@@ -218,6 +221,10 @@ interface TimelineEditorProps {
   clips?: ClipItem[];
   mediaLibrary?: any[];
   onMediaUploaded?: (items: any[]) => void;
+  /** Replace/patch the user's library (MediaBay metadata edits and deletes). */
+  onSetMediaLibrary?: (updater: (prev: any[]) => any[]) => void;
+  /** Persist the current timeline to the server. Resolves with the saved project. */
+  onSaveProject?: () => Promise<Project | null>;
   onToggleMonitorMode?: (isMonitor: boolean) => void;
   onNavigateToAstraPost?: () => void;
   onNavigateView?: (view: any) => void;
@@ -561,6 +568,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   clips = [],
   mediaLibrary = [],
   onMediaUploaded,
+  onSetMediaLibrary,
+  onSaveProject,
   onToggleMonitorMode,
   onNavigateToAstraPost,
   onNavigateView,
@@ -756,16 +765,47 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   // Project Unsaved Changes Tracker (for gold star ★ in top bar)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
 
-  const handleSaveProject = useCallback(() => {
-    setHasUnsavedChanges(false);
-    if (activeProject && onUpdateProject) {
-      onUpdateProject({
-        ...activeProject,
-        updatedAt: "Just now",
-      });
+  // Audio clips play alongside the picture during playback.
+  useTimelineAudio({ items, tracks, playhead: playheadTime, playing: isPlaying, masterVolume: volume / 100, muted: isMuted });
+
+  const isSavingRef = useRef(false);
+  const handleSaveProject = useCallback(async () => {
+    if (isSavingRef.current) return;
+    if (!onSaveProject) {
+      showToast("Saving isn't available here");
+      return;
     }
-    showToast("Project saved (★ cleared)");
-  }, [activeProject, onUpdateProject, showToast]);
+    isSavingRef.current = true;
+    showToast("Saving…");
+    try {
+      const saved = await onSaveProject();
+      if (!saved) throw new Error("not saved");
+      setHasUnsavedChanges(false);
+      showToast("Project saved");
+    } catch (e: any) {
+      showToast(`Couldn't save the project${e?.message && e.message !== "not saved" ? `: ${e.message}` : ". Sign in and try again."}`);
+    } finally {
+      isSavingRef.current = false;
+    }
+  }, [onSaveProject, showToast]);
+
+  // Track resolution: media always lands on an existing track of the right kind
+  // (audio on an audio track, video on a video track), creating one if needed.
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
+  const resolveTrack = useCallback(
+    (kind: MediaKind, preferred?: TimelineTrack | null) => {
+      const r = resolveTrackForMedia(tracksRef.current, kind, preferred);
+      if (r.created) {
+        tracksRef.current = r.tracks;
+        onUpdateTracks?.(r.tracks);
+      }
+      const track = r.tracks.find((t) => t.id === r.trackId) || null;
+      const badge = track ? (track.name.match(/\(([AV]\d)\)/)?.[1] || track.name) : r.trackId;
+      return { trackId: r.trackId, track, badge };
+    },
+    [onUpdateTracks]
+  );
 
   // Assets search & collapsible folders
   const [assetsSearchQuery, setAssetsSearchQuery] = useState<string>("");
@@ -809,12 +849,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       sourceInPoint !== null && sourceOutPoint !== null && sourceOutPoint > sourceInPoint
         ? Math.round((sourceOutPoint - sourceInPoint) * 100) / 100
         : (sourceMedia.durationSec || 30);
-    const targetTrackId = sourceMedia.type === "audio" ? "track_voice" : "track_video";
+    const srcKind = mediaKindOf(sourceMedia.type);
+    const { trackId: targetTrackId, track: srcTrack } = resolveTrack(srcKind);
     const newItem: TimelineItem = {
       id: `item_${Date.now()}`,
       trackId: targetTrackId,
       name: sourceMedia.name,
-      type: sourceMedia.type as any,
+      type: itemTypeFor(srcKind, srcTrack),
       startTime: playheadTime,
       duration: insertDuration,
       sourceStartTime: sourceInPoint || 0,
@@ -827,7 +868,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     setHasUnsavedChanges(true);
     setActiveMonitorMode("program");
     showToast(`Inserted "${sourceMedia.name}" at ${playheadTime.toFixed(1)}s`);
-  }, [sourceMedia, playheadTime, sourceInPoint, items, onUpdateItems, showToast]);
+  }, [sourceMedia, playheadTime, sourceInPoint, sourceOutPoint, items, onUpdateItems, showToast, resolveTrack]);
 
   // Drag & drop asset state for tracks and library items
   const [dragOverTrackId, setDragOverTrackId] = useState<string | null>(null);
@@ -2676,13 +2717,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   }, []);
 
   // Captions list state (editable)
-  const [captionsList, setCaptionsList] = useState<Array<{ id: string; text: string; start: number; end: number }>>([
-    { id: "cap_1", text: "If you've been posting video content", start: 0, end: 2.2 },
-    { id: "cap_2", text: "for 60 days and feel like quitting,", start: 2.2, end: 5.4 },
-    { id: "cap_3", text: "listen closely to this framework.", start: 5.4, end: 8.6 },
-    { id: "cap_4", text: "The algorithm rewards daily cadence.", start: 8.6, end: 12.0 },
-    { id: "cap_5", text: "One longform recording yields 20 assets.", start: 12.0, end: 16.5 },
-  ]);
+  // Empty until the user transcribes or types captions (no sample text).
+  const [captionsList, setCaptionsList] = useState<Array<{ id: string; text: string; start: number; end: number }>>([]);
 
   // Hidden file input for custom uploads
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2816,26 +2852,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     initialTrackId?: string;
     groupMembers?: { id: string; initialStartTime: number; duration: number; trackId: string }[];
   } | null>(null);
-
-  // Sync uploaded mediaLibrary items into project assets
-  useEffect(() => {
-    if (mediaLibrary && mediaLibrary.length > 0) {
-      const converted: ProjectAsset[] = mediaLibrary.map((m: any) => ({
-        id: m.id || `media_${Date.now()}`,
-        title: m.title || m.filename || "Media Clip",
-        duration: `${Math.round(m.duration || 15)}s`,
-        durationSec: Math.round(m.duration || 15),
-        type: (m.mimeType?.startsWith("image/") ? "image" : m.mimeType?.startsWith("audio/") ? "music" : "video") as TrackType,
-        img: m.thumbnailUrl || MEDIA_PLACEHOLDER,
-        sourceUrl: m.url || m.signedUrl,
-      }));
-      setProjectAssets((prev) => {
-        const existingIds = new Set(prev.map((p) => p.id));
-        const newOnes = converted.filter((c) => !existingIds.has(c.id));
-        return [...newOnes, ...prev];
-      });
-    }
-  }, [mediaLibrary]);
 
   // Recalculate total duration whenever items change
   useEffect(() => {
@@ -4780,29 +4796,74 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     return `00:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${f.toString().padStart(2, "0")}`;
   };
 
-  // Sync external mediaLibrary updates into projectAssets
+  // Library media (server items) mirrored into the project assets used by older panels.
   useEffect(() => {
-    if (mediaLibrary && mediaLibrary.length > 0) {
-      setProjectAssets((prev) => {
-        const existingUrls = new Set(prev.map((a) => a.sourceUrl).filter(Boolean));
-        const newFromMedia: ProjectAsset[] = mediaLibrary
-          .filter((m: any) => m.url && !existingUrls.has(m.url))
-          .map((m: any) => ({
-            id: `med_${m.id}`,
-            title: m.name,
-            duration: m.duration ? `${m.duration}s` : (m.type === "image" ? "Img" : "30s"),
-            durationSec: m.duration || (m.type === "image" ? 5 : 30),
-            type: m.type === "audio" ? "music" : m.type === "image" ? "image" : "video",
-            img: m.thumbnail || (m.type === "image" ? m.url : MEDIA_PLACEHOLDER),
-            sourceUrl: m.url,
-          }));
-        if (newFromMedia.length > 0) {
-          return [...newFromMedia, ...prev];
-        }
-        return prev;
-      });
-    }
+    const plain = (u?: string) => (u || "").split("?")[0];
+    const lib = (mediaLibrary || []).filter((m: any) => m?.url && !String(m.url).startsWith("blob:"));
+    const fromMedia: ProjectAsset[] = lib.map((m: any) => ({
+      id: `med_${m.id}`,
+      title: m.name,
+      duration: m.type === "image" ? "Img" : m.duration ? `${m.duration}s` : "",
+      durationSec: m.duration || (m.type === "image" ? 5 : 10),
+      type: m.type === "audio" ? "music" : m.type === "image" ? "image" : "video",
+      img: m.thumbnail || (m.type === "image" ? m.url : MEDIA_PLACEHOLDER),
+      sourceUrl: m.url,
+    }));
+    const urls = new Set(fromMedia.map((a) => plain(a.sourceUrl)));
+    setProjectAssets((prev) => [
+      ...fromMedia,
+      ...prev.filter((a) => !a.id.startsWith("med_") && !urls.has(plain(a.sourceUrl)) && !String(a.sourceUrl || "").startsWith("blob:")),
+    ]);
   }, [mediaLibrary]);
+
+  const [isImportingMedia, setIsImportingMedia] = useState(false);
+  const [isMediaBayWindowOpen, setIsMediaBayWindowOpen] = useState(false);
+
+  // Upload files into the user's server library (no AI processing, no project).
+  const uploadToLibrary = async (files: File[]): Promise<any[]> => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name);
+    const res = await fetch("/api/upload?library=1", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error("Sign in to import media.");
+    if (!res.ok || !data?.success) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);
+    return Array.isArray(data.mediaItems) ? data.mediaItems : [];
+  };
+
+  /** Put a library item on the timeline at `time`. Audio goes on an audio track, video on a video track. */
+  const placeMediaOnTimeline = (
+    media: { name?: string; title?: string; type?: string; url?: string; sourceUrl?: string; duration?: number; durationSec?: number },
+    time: number,
+    preferredTrack?: TimelineTrack | null,
+    baseItems: TimelineItem[] = items
+  ) => {
+    const kind = mediaKindOf(media.type);
+    const { trackId, track, badge } = resolveTrack(kind, preferredTrack);
+    const dur = Number(media.durationSec || media.duration) || (kind === "image" ? 5 : 10);
+    const newItem: TimelineItem = {
+      id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      trackId,
+      name: media.name || media.title || "Clip",
+      type: itemTypeFor(kind, track),
+      startTime: Math.max(0, Number(time.toFixed(2))),
+      duration: kind === "image" ? 5 : Math.round(dur * 100) / 100,
+      sourceStartTime: 0,
+      sourceUrl: media.url || media.sourceUrl || "",
+      volume: 100,
+      speed: 1.0,
+      cropMode: "face_track",
+    };
+    return { newItem, updated: [...baseItems, newItem], badge };
+  };
+
+  const addLibraryItemAt = (media: any, time: number, preferredTrack?: TimelineTrack | null) => {
+    const { newItem, updated, badge } = placeMediaOnTimeline(media, time, preferredTrack);
+    pushHistory(updated, `Add ${newItem.name}`);
+    setSelectedItemId(newItem.id);
+    setHasUnsavedChanges(true);
+    showToast(`Added "${newItem.name}" to ${badge} at ${newItem.startTime.toFixed(1)}s`);
+    return newItem;
+  };
 
   // Unified media import pipeline with Object URL lifecycle tracking, codec checking, duration probing, and placement
   const processImportedFiles = async (
@@ -4826,132 +4887,52 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       return;
     }
 
-    mediaDiagnostics.logBufferingState("start", { count: fileArray.length, files: fileArray.map((f) => f.name) });
     showToast(`Importing ${fileArray.length} media file${fileArray.length > 1 ? "s" : ""}...`);
+    setIsImportingMedia(true);
+    let uploaded: any[] = [];
+    try {
+      uploaded = await uploadToLibrary(fileArray);
+    } catch (err: any) {
+      showToast(err?.message || "Import failed");
+      setIsImportingMedia(false);
+      return;
+    }
+    setIsImportingMedia(false);
+    if (uploaded.length === 0) {
+      showToast("Nothing was imported.");
+      return;
+    }
+    onMediaUploaded?.(uploaded);
 
-    const newAssets: ProjectAsset[] = [];
-    const newItems: TimelineItem[] = [];
-    let currentDropTime = options?.targetTime !== undefined ? options.targetTime : Number(playheadTime.toFixed(2));
-
-    for (const file of fileArray) {
-      const isVid = file.type.startsWith("video/") || /\.(mp4|mov|webm|avi|m4v)$/i.test(file.name);
-      const isAud = file.type.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name);
-      const isImg = file.type.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(file.name);
-
-      // Check browser codec capability and log details
-      const codecCheck = mediaDiagnostics.inspectCodecSupport(file.type || file.name);
-      console.info(
-        `[MediaPipeline] Processing file "${file.name}": size=${(file.size / (1024 * 1024)).toFixed(2)}MB, mime=${file.type}, codecSupport=${codecCheck.canPlay}`
-      );
-
-      // Create tracked Object URL
-      const realUrl = mediaDiagnostics.createTrackedObjectURL(file, file.name);
-
-      // Extract real metadata (duration, dimensions, thumbnail)
-      let detectedDuration = isVid ? 30 : isAud ? 30 : 5;
-      let detectedThumb = isImg ? realUrl : "";
-      if (isVid || isAud) {
-        try {
-          const meta = await extractMediaMetadata(file);
-          if (meta.duration && isFinite(meta.duration) && meta.duration > 0) {
-            detectedDuration = Math.round(meta.duration * 100) / 100;
-          }
-          if (meta.thumbnail) {
-            detectedThumb = meta.thumbnail;
-          }
-        } catch {
-          try {
-            const probeRes = await mediaDiagnostics.probeMediaUrl(realUrl, 3000);
-            if (probeRes.supported && probeRes.duration) {
-              detectedDuration = Math.round(probeRes.duration * 100) / 100;
-            }
-          } catch (probeErr) {
-            console.warn("[MediaPipeline] Media probe warning:", probeErr);
-          }
-        }
-      }
-
-      // Client-side broadcast to Media Vault so uploaded asset immediately appears with no server dependency
-      const clientMediaItem: any = {
-        id: `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        name: file.name,
-        type: isVid ? "video" : isAud ? "audio" : "image",
-        format: file.name.split(".").pop()?.toUpperCase() || "MP4",
-        duration: detectedDuration,
-        sizeBytes: file.size,
-        size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-        url: realUrl,
-        thumbnail: detectedThumb || realUrl,
-        folder: isVid ? "Source Footage" : isAud ? "Audio & Music" : "Brand Assets",
-        uploadedAt: "Just now",
-        createdAt: new Date().toISOString(),
-        tags: ["Imported Asset", isVid ? "VIDEO" : isAud ? "AUDIO" : "IMAGE"],
-      };
-      onMediaUploaded?.([clientMediaItem]);
-
-      const newAsset: ProjectAsset = {
-        id: `asset_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        title: file.name,
-        duration: isImg ? "Img" : `${detectedDuration}s`,
-        durationSec: detectedDuration,
-        type: isVid ? "video" : isAud ? "music" : "image",
-        img: isImg
-          ? realUrl
-          : (detectedThumb || MEDIA_PLACEHOLDER),
-        sourceUrl: realUrl,
-      };
-
-      newAssets.push(newAsset);
-
-      // Place onto timeline if requested
-      if (options?.insertAtPlayhead || options?.targetTime !== undefined || options?.targetTrackId) {
-        let targetTrackId = options?.targetTrackId;
-        if (!targetTrackId) {
-          if (isVid) targetTrackId = "track_video";
-          else if (isAud) targetTrackId = "track_music";
-          else targetTrackId = "track_broll";
-        }
-
-        const newItem: TimelineItem = {
-          id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          trackId: targetTrackId,
-          name: file.name,
-          type: isImg ? "image" : isAud ? "music" : "video",
-          startTime: currentDropTime,
-          duration: detectedDuration,
-          sourceStartTime: 0,
-          sourceUrl: realUrl,
-          volume: isAud ? 50 : 100,
-          speed: 1.0,
-          cropMode: "face_track",
-        };
-
-        newItems.push(newItem);
-        currentDropTime = Number((currentDropTime + detectedDuration).toFixed(2));
-      }
+    const shouldPlace = !!(options?.insertAtPlayhead || options?.targetTime !== undefined || options?.targetTrackId);
+    if (!shouldPlace) {
+      if (options?.autoSelectInMonitor) handleSelectMediaAsset({ ...uploaded[0], durationSec: uploaded[0].duration });
+      showToast(`Imported ${uploaded.length} item${uploaded.length > 1 ? "s" : ""} into the MediaBay`);
+      return;
     }
 
-    if (newAssets.length > 0) {
-      setProjectAssets((prev) => [...newAssets, ...prev]);
-      setSelectedAssetId(newAssets[0].id);
-
-      if (options?.autoSelectInMonitor || options?.insertAtPlayhead) {
-        handleSelectMediaAsset(newAssets[0]);
-      }
+    const preferred = options?.targetTrackId ? tracksRef.current.find((t) => t.id === options.targetTrackId) || null : null;
+    let t = options?.targetTime !== undefined ? options.targetTime : Number(playheadTime.toFixed(2));
+    let working = items;
+    const placed: TimelineItem[] = [];
+    let lastBadge = "";
+    for (const m of uploaded) {
+      const { newItem, updated, badge } = placeMediaOnTimeline(m, t, preferred, working);
+      working = updated;
+      placed.push(newItem);
+      lastBadge = badge;
+      t = Number((t + newItem.duration).toFixed(2));
     }
-
-    if (newItems.length > 0) {
-      const updated = [...items, ...newItems];
-      pushHistory(updated);
-      setSelectedItemId(newItems[0].id);
-      setPlayheadTime(newItems[0].startTime);
-      if (videoRef.current) {
-        videoRef.current.currentTime = newItems[0].startTime;
-      }
-      showToast(`Imported and placed ${newItems.length} clip(s) on timeline`);
-    } else if (newAssets.length > 0) {
-      showToast(`Imported ${newAssets.length} asset(s) into Project Media`);
-    }
+    pushHistory(working, `Import ${placed.length} clip(s)`);
+    setSelectedItemId(placed[0].id);
+    setHasUnsavedChanges(true);
+    setPlayheadTime(placed[0].startTime);
+    if (videoRef.current) videoRef.current.currentTime = placed[0].startTime;
+    showToast(
+      placed.length === 1
+        ? `Imported "${placed[0].name}" to ${lastBadge} at ${placed[0].startTime.toFixed(1)}s`
+        : `Imported and placed ${placed.length} clips`
+    );
   };
 
   // Handle local file upload with real duration detection and diagnostic logging
@@ -4967,45 +4948,18 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
   // Insert an asset into the timeline
   const handleInsertAssetToTimeline = (asset: ProjectAsset) => {
-    console.log("[TimelineEditor] handleInsertAssetToTimeline called with asset:", asset);
-    let targetTrackId = "track_video";
-    if (asset.type === "broll" || asset.type === "image") targetTrackId = "track_broll";
-    if (asset.type === "music" || asset.type === "sfx" || asset.type === "voice") targetTrackId = "track_music";
-    if (asset.type === "text") targetTrackId = "track_text";
-    if (asset.type === "captions") targetTrackId = "track_captions";
-
     const startTime = Number(playheadTime.toFixed(2));
-    const duration = asset.durationSec || 5;
-
-    const newItem: TimelineItem = {
-      id: `item_${Date.now()}_${asset.id}`,
-      trackId: targetTrackId,
-      name: asset.title,
-      type: asset.type,
-      startTime: startTime,
-      duration: duration,
-      sourceStartTime: 0,
-      sourceUrl: asset.sourceUrl,
-      volume: asset.type === "music" ? 40 : 100,
-      speed: 1.0,
-      cropMode: "face_track",
-    };
-
-    const updated = [...items, newItem];
-    console.log(`[TimelineEditor] Inserting item "${newItem.name}" to track "${targetTrackId}" at ${startTime}s (duration ${duration}s). Total items will be: ${updated.length}`);
-    pushHistory(updated);
-    setSelectedItemId(newItem.id);
-
-    // Immediate video player sync
-    if (asset.sourceUrl && (asset.type === "video" || asset.type === "broll")) {
-      if (videoRef.current) {
-        console.log(`[TimelineEditor] Syncing video preview element to new asset URL: ${asset.sourceUrl}`);
-        videoRef.current.src = asset.sourceUrl;
-        videoRef.current.currentTime = 0;
-      }
+    if (asset.type === "text" || asset.type === "captions") {
+      const { trackId } = resolveTrack(asset.type);
+      const newItem: TimelineItem = {
+        id: `item_${Date.now()}_${asset.id}`, trackId, name: asset.title, type: asset.type,
+        startTime, duration: asset.durationSec || 4, sourceStartTime: 0,
+      };
+      pushHistory([...items, newItem]);
+      setSelectedItemId(newItem.id);
+      return;
     }
-
-    showToast(`Added "${asset.title}" to timeline at ${startTime}s`);
+    addLibraryItemAt({ name: asset.title, type: asset.type, url: asset.sourceUrl, durationSec: asset.durationSec }, startTime);
   };
 
   // Dedicated action to add currently selected asset or first asset to timeline
@@ -5025,7 +4979,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const handleInsertTextPreset = (titleText: string) => {
     const newItem: TimelineItem = {
       id: `item_text_${Date.now()}`,
-      trackId: "track_text",
+      trackId: resolveTrack("text").trackId,
       name: titleText,
       type: "text",
       startTime: Number(playheadTime.toFixed(2)),
@@ -5043,7 +4997,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const handleInsertAudioPreset = (audioName: string) => {
     const newItem: TimelineItem = {
       id: `item_audio_${Date.now()}`,
-      trackId: "track_music",
+      trackId: resolveTrack("audio").trackId,
       name: audioName,
       type: "music",
       startTime: Number(playheadTime.toFixed(2)),
@@ -5327,30 +5281,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       // 1. Load into Source Monitor
       handleSelectMediaAsset(asset);
 
-      // 2. Insert onto V1 at current playheadTime
-      const v1Track = tracks.find((t) => t.type === "video") || tracks[0];
-      const targetTrackId = v1Track ? v1Track.id : "track_video";
-      const duration = asset.durationSec || (typeof asset.duration === "number" ? asset.duration : 8);
-
-      const newItem: TimelineItem = {
-        id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        trackId: targetTrackId,
-        name: asset.title || asset.name || "Source Clip",
-        type: (asset.type === "image" ? "image" : "video") as any,
-        startTime: playheadTime,
-        duration: duration,
-        sourceStartTime: 0,
-        sourceUrl: asset.url || asset.sourceUrl || "",
-        volume: 100,
-        speed: 1.0,
-        scale: 1.0,
-      };
-
-      onUpdateItems([...items, newItem]);
+      // 2. Insert at the playhead: video on a video track, audio on an audio track
+      const { newItem, updated, badge } = placeMediaOnTimeline(asset, playheadTime);
+      pushHistory(updated, `Add ${newItem.name}`);
       setSelectedItemId(newItem.id);
       setHasUnsavedChanges(true);
       setActiveMonitorMode("program");
-      showToast(`Loaded "${asset.title || asset.name}" as source & inserted on V1 at ${playheadTime.toFixed(1)}s`);
+      showToast(`Loaded "${newItem.name}" as source & inserted on ${badge} at ${playheadTime.toFixed(1)}s`);
     } catch (err) {
       console.error("Monitor drop error:", err);
     }
@@ -5466,65 +5403,22 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       const rawTime = Math.max(0, dropX / zoomLevel);
       const dropTime = Number(getSnappedTimestamp(rawTime, undefined).snappedTime.toFixed(2));
 
-      // Intelligent target track resolution based on media type
-      let targetTrackId = track.id;
-      if (asset.type === "video" || asset.type === "broll" || asset.type === "image") {
-        if (track.type !== "video" && track.type !== "broll") {
-          const v1 = tracks.find((t) => t.type === "video" || t.id === "track_video");
-          targetTrackId = v1 ? v1.id : track.id;
-        }
-      } else if (asset.type === "music" || asset.type === "sfx" || asset.type === "voice" || asset.type === "audio") {
-        if (track.type !== "music" && track.type !== "sfx" && track.type !== "voice") {
-          const a1 = tracks.find((t) => t.type === "voice" || t.type === "music" || t.id === "track_voice");
-          targetTrackId = a1 ? a1.id : track.id;
-        }
-      } else if (asset.type === "text") {
-        if (track.type !== "text") {
-          const t1 = tracks.find((t) => t.type === "text");
-          if (t1) targetTrackId = t1.id;
-        }
-      } else if (asset.type === "captions") {
-        if (track.type !== "captions") {
-          const c1 = tracks.find((t) => t.type === "captions");
-          if (c1) targetTrackId = c1.id;
-        }
+      const kind = mediaKindOf(asset.type);
+      if (kind === "text" || kind === "captions") {
+        const { trackId } = resolveTrack(kind, track);
+        const newItem: TimelineItem = {
+          id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          trackId, name: asset.title || asset.name || "Title", type: kind, startTime: dropTime,
+          duration: asset.durationSec || 4, sourceStartTime: 0, text: asset.text, color: "#ffffff",
+        };
+        pushHistory([...items, newItem]);
+        setSelectedItemId(newItem.id);
+        showToast(`Added "${newItem.name}" at ${dropTime.toFixed(1)}s`);
+        return;
       }
-
-      const newItem: TimelineItem = {
-        id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        trackId: targetTrackId,
-        name: asset.title || asset.name || "New Clip",
-        type: asset.type === "image" ? "image" : (asset.type === "voice" || asset.type === "audio" || asset.type === "music" || asset.type === "sfx" ? (targetTrackId === "track_voice" ? "voice" : "music") : (asset.type || "video")),
-        startTime: dropTime,
-        duration: asset.durationSec || (asset.type === "image" ? 5 : 6),
-        sourceStartTime: 0,
-        sourceUrl: asset.sourceUrl || asset.url || "",
-        volume: asset.type === "music" ? 40 : 100,
-        speed: 1.0,
-        cropMode: "face_track",
-        text: asset.text,
-        color: asset.type === "text" ? "#ffffff" : undefined,
-      };
-
-      const updated = [...items, newItem];
-      pushHistory(updated);
-      setSelectedItemId(newItem.id);
-      setPlayheadTime(dropTime);
-      if (videoRef.current) {
-        videoRef.current.currentTime = dropTime;
-      }
-      const targetTrack = tracks.find((t) => t.id === targetTrackId) || track;
-      const trackBadge =
-        targetTrack.id === "track_video" || targetTrack.type === "video"
-          ? "V1"
-          : targetTrack.id === "track_broll" || targetTrack.type === "broll"
-          ? "V2"
-          : targetTrack.id === "track_voice" || targetTrack.type === "voice"
-          ? "A1"
-          : targetTrack.id === "track_music" || targetTrack.type === "music"
-          ? "A2"
-          : targetTrack.name;
-      showToast(`Added "${newItem.name}" to ${trackBadge} at ${dropTime.toFixed(1)}s`);
+      const placedItem = addLibraryItemAt(asset, dropTime, track);
+      setPlayheadTime(placedItem.startTime);
+      if (videoRef.current) videoRef.current.currentTime = placedItem.startTime;
     } catch (err) {
       console.error("Drop handling error:", err);
     }
@@ -6069,302 +5963,28 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           await processImportedFiles(e.dataTransfer.files, { autoSelectInMonitor: true });
         }
       }}
-      className="flex-1 overflow-y-auto p-1.5 space-y-1.5 text-xs min-h-0"
+      className={mediaPanelTab === "media" && !isMediaBayWindowOpen ? "flex-1 min-h-0 flex flex-col overflow-hidden text-xs" : "flex-1 overflow-y-auto p-1.5 space-y-1.5 text-xs min-h-0"}
     >
-            {/* TAB: MEDIA */}
-            {mediaPanelTab === "media" && (
-              <div className="space-y-1.5">
-                {/* Search Bar */}
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={assetsSearchQuery}
-                    onChange={(e) => setAssetsSearchQuery(e.target.value)}
-                    placeholder="Search bins, footage, audio..."
-                    className="w-full bg-[#151922] border border-[#272D3A] focus:border-[#16D9F5] rounded pl-7 pr-6 py-1 text-xs text-white placeholder-gray-500 focus:outline-none"
-                  />
-                  {assetsSearchQuery && (
-                    <button
-                      onClick={() => setAssetsSearchQuery("")}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-                      title="Clear search"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Collapsible Project Bins & Folders (NLE File Tree) */}
-                <div className="space-y-1 border border-[#212735] rounded-md bg-[#0E121A] p-1.5">
-                  <div className="flex items-center justify-between text-[9.5px] text-gray-400 font-bold uppercase tracking-wider pb-0.5 border-b border-[#212735]">
-                    <span className="flex items-center gap-1 text-[#16D9F5]">
-                      <Folder className="w-3 h-3" />
-                      <span>Project Bins</span>
-                    </span>
-                    <span className="font-mono text-gray-500 text-[8.5px]">
-                      {NLE_PROJECT_FOLDERS.length} BINS
-                    </span>
-                  </div>
-
-                  <div className="space-y-0.5 max-h-52 overflow-y-auto pr-0.5">
-                    {NLE_PROJECT_FOLDERS.map((folder) => {
-                      const isOpen = openFolders[folder.id] ?? true;
-                      const allItems = [
-                        ...(folder.items || []),
-                        ...(folder.subfolders?.flatMap((s) => s.items) || []),
-                      ];
-                      const filteredItems = assetsSearchQuery
-                        ? allItems.filter((it) =>
-                            it.name.toLowerCase().includes(assetsSearchQuery.toLowerCase())
-                          )
-                        : allItems;
-
-                      if (assetsSearchQuery && filteredItems.length === 0) return null;
-
-                      return (
-                        <div key={folder.id} className="text-xs">
-                          {/* Folder Header */}
-                          <div
-                            onClick={() => toggleFolder(folder.id)}
-                            className="flex items-center justify-between py-0.5 px-1 rounded hover:bg-[#1A202C] cursor-pointer text-gray-300 hover:text-white select-none group"
-                          >
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              {isOpen ? (
-                                <ChevronDown className="w-3 h-3 text-[#16D9F5] flex-shrink-0" />
-                              ) : (
-                                <ChevronRight className="w-3 h-3 text-gray-400 group-hover:text-white flex-shrink-0" />
-                              )}
-                              <FolderOpen className="w-3 h-3 text-amber-400 flex-shrink-0" />
-                              <span className="font-semibold text-[10.5px] truncate">{folder.name}</span>
-                            </div>
-                            <span className="text-[8.5px] font-mono text-gray-500 bg-[#161C26] px-1 rounded">
-                              {filteredItems.length}
-                            </span>
-                          </div>
-
-                          {/* Folder Items */}
-                          {isOpen && (
-                            <div className="pl-2.5 pr-0.5 py-0.5 space-y-0.5">
-                              {/* Subfolders if any */}
-                              {folder.subfolders?.map((sub) => {
-                                const subOpen = openFolders[sub.id] ?? true;
-                                const subItems = assetsSearchQuery
-                                  ? sub.items.filter((it) =>
-                                      it.name.toLowerCase().includes(assetsSearchQuery.toLowerCase())
-                                    )
-                                  : sub.items;
-                                if (assetsSearchQuery && subItems.length === 0) return null;
-
-                                return (
-                                  <div key={sub.id} className="space-y-0.5">
-                                    <div
-                                      onClick={() => toggleFolder(sub.id)}
-                                      className="flex items-center justify-between py-0.5 px-1 rounded hover:bg-[#1A202C] cursor-pointer text-gray-400 hover:text-gray-200 select-none text-[9.5px]"
-                                    >
-                                      <div className="flex items-center gap-1 min-w-0">
-                                        {subOpen ? (
-                                          <ChevronDown className="w-2.5 h-2.5 text-gray-400" />
-                                        ) : (
-                                          <ChevronRight className="w-2.5 h-2.5 text-gray-500" />
-                                        )}
-                                        <Folder className="w-2.5 h-2.5 text-amber-500/80" />
-                                        <span className="truncate">{sub.name}</span>
-                                      </div>
-                                      <span className="text-[8px] font-mono text-gray-500">
-                                        {subItems.length}
-                                      </span>
-                                    </div>
-
-                                    {subOpen && (
-                                      <div className="pl-2 space-y-0.5">
-                                        {subItems.map((item) => {
-                                          const isSelected = sourceMedia?.id === item.id;
-                                          return (
-                                            <div
-                                              key={item.id}
-                                              draggable={true}
-                                              onDragStart={(e) => handleMediaRowDragStart(e, item)}
-                                              onDragEnd={handleDragEnd}
-                                              onClick={() => handleSelectMediaAsset(item)}
-                                              onDoubleClick={() => {
-                                                handleSelectMediaAsset(item);
-                                                handleInsertSourceToTimeline();
-                                              }}
-                                              className={`flex items-center justify-between p-0.5 px-1 rounded cursor-grab active:cursor-grabbing transition-colors group ${
-                                                isSelected
-                                                  ? "bg-[#168CFF]/20 border border-[#16D9F5]/60 text-white"
-                                                  : "hover:bg-[#161D2A] text-gray-300 hover:text-white border border-transparent"
-                                              }`}
-                                              title="Click to select source • Drag to drop on Monitor or Timeline (V1/A1) • Double-click to insert"
-                                            >
-                                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                                <img
-                                                  src={item.thumbnail}
-                                                  alt={item.name}
-                                                  className="w-6 h-4 object-cover rounded-xs flex-shrink-0 bg-black"
-                                                />
-                                                <div className="min-w-0 flex-1">
-                                                  <div className="text-[9.5px] font-medium truncate group-hover:text-[#16D9F5]">
-                                                    {item.name}
-                                                  </div>
-                                                  <div className="flex items-center gap-1 text-[8px] font-mono text-gray-500">
-                                                    <span>{item.duration}</span>
-                                                    {item.resolution && (
-                                                      <>
-                                                        <span>•</span>
-                                                        <span>{item.resolution}</span>
-                                                      </>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              </div>
-                                              <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  handleSelectMediaAsset(item);
-                                                  handleInsertSourceToTimeline();
-                                                }}
-                                                className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-[#168CFF] hover:bg-[#167CE0] text-white cursor-pointer transition-opacity"
-                                                title="Add to timeline (+)"
-                                              >
-                                                <Plus className="w-2.5 h-2.5" />
-                                              </button>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-
-                              {/* Direct items in folder */}
-                              {folder.items?.map((item) => {
-                                const isSelected = sourceMedia?.id === item.id;
-                                return (
-                                  <div
-                                    key={item.id}
-                                    draggable={true}
-                                    onDragStart={(e) => handleMediaRowDragStart(e, item)}
-                                    onDragEnd={handleDragEnd}
-                                    onClick={() => handleSelectMediaAsset(item)}
-                                    onDoubleClick={() => {
-                                      handleSelectMediaAsset(item);
-                                      handleInsertSourceToTimeline();
-                                    }}
-                                    className={`flex items-center justify-between p-0.5 px-1 rounded cursor-grab active:cursor-grabbing transition-colors group ${
-                                      isSelected
-                                        ? "bg-[#168CFF]/20 border border-[#16D9F5]/60 text-white"
-                                        : "hover:bg-[#161D2A] text-gray-300 hover:text-white border border-transparent"
-                                    }`}
-                                    title="Click to select source • Drag to drop on Monitor or Timeline (V1/A1) • Double-click to insert"
-                                  >
-                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                      <img
-                                        src={item.thumbnail}
-                                        alt={item.name}
-                                        className="w-6 h-4 object-cover rounded-xs flex-shrink-0 bg-black"
-                                      />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="text-[9.5px] font-medium truncate group-hover:text-[#16D9F5]">
-                                          {item.name}
-                                        </div>
-                                        <div className="flex items-center gap-1 text-[8px] font-mono text-gray-500">
-                                          <span>{item.duration}</span>
-                                          {item.resolution && (
-                                            <>
-                                              <span>•</span>
-                                              <span>{item.resolution}</span>
-                                            </>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleSelectMediaAsset(item);
-                                        handleInsertSourceToTimeline();
-                                      }}
-                                      className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-[#168CFF] hover:bg-[#167CE0] text-white cursor-pointer transition-opacity"
-                                      title="Add to timeline (+)"
-                                    >
-                                      <Plus className="w-2.5 h-2.5" />
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-[#9CA5B5] relative gap-1 flex-wrap pt-1">
-                  <span className="font-semibold text-gray-200">Timeline Ready Assets ({projectAssets.length})</span>
-                </div>
-
-                <p className="text-[10px] text-[#9CA5B5]">
-                  Click to select • Double-click or click <strong className="text-white">Add</strong> to insert onto timeline.
-                </p>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {projectAssets.map((asset) => {
-                    const isSelected = selectedAssetId === asset.id;
-                    return (
-                      <div
-                        key={asset.id}
-                        draggable
-                        onDragStart={(e) => handleAssetDragStart(e, asset)}
-                        onDragEnd={handleDragEnd}
-                        onClick={() => setSelectedAssetId(asset.id)}
-                        onDoubleClick={() => handleInsertAssetToTimeline(asset)}
-                        className={`bg-[#171C27] border rounded-lg p-1.5 cursor-grab active:cursor-grabbing group transition-all relative ${
-                          isSelected ? "border-[#16D9F5] ring-1 ring-[#16D9F5]" : "border-[#272D3A] hover:border-[#16D9F5]/50"
-                        }`}
-                        title="Click to select, double-click or click + Add to insert"
-                      >
-                        <div className="aspect-video bg-black rounded overflow-hidden relative mb-1">
-                          <img
-                            src={asset.img}
-                            alt={asset.title}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform pointer-events-none"
-                          />
-                          <span className="absolute bottom-0.5 right-0.5 text-[8px] bg-black/80 px-1 rounded text-white font-mono">
-                            {asset.duration}
-                          </span>
-                          <span className="absolute top-1 left-1 bg-black/60 backdrop-blur-xs p-0.5 rounded text-white/80 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <GripVertical className="w-2.5 h-2.5" />
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-gray-300 font-medium truncate" title={asset.title}>{asset.title}</p>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="text-[9px] text-[#9CA5B5] uppercase font-mono">{asset.type}</span>
-                          <button
-                            id={`btn-insert-asset-${asset.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleInsertAssetToTimeline(asset);
-                            }}
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-all cursor-pointer ${
-                              isSelected
-                                ? "bg-[#16D9F5] text-black hover:bg-cyan-300 shadow-xs"
-                                : "text-[#16D9F5] hover:bg-[#16D9F5] hover:text-black border border-[#16D9F5]/40"
-                            }`}
-                            title="Add this clip to timeline at playhead"
-                          >
-                            <Plus className="w-2.5 h-2.5" /> Add
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            {/* TAB: MEDIA (MediaBay) */}
+            {mediaPanelTab === "media" && !isMediaBayWindowOpen && (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <MediaBay
+                  layout="panel"
+                  items={mediaLibrary as any}
+                  setItems={(fn) => onSetMediaLibrary?.(fn as any)}
+                  onAdd={(m) => addLibraryItemAt(m, playheadTime)}
+                  onDragStartItem={(e, m) => handleMediaRowDragStart(e, m)}
+                  onDragEndItem={handleDragEnd}
+                  onImportFiles={(files) => processImportedFiles(files, { autoSelectInMonitor: false })}
+                  onExpand={() => setIsMediaBayWindowOpen(true)}
+                  isImporting={isImportingMedia}
+                />
+              </div>
+            )}
+            {mediaPanelTab === "media" && isMediaBayWindowOpen && (
+              <div className="p-3 text-[11px] text-gray-500 text-center">
+                MediaBay is open in its own window.
+                <button type="button" onClick={() => setIsMediaBayWindowOpen(false)} className="block mx-auto mt-1 text-[#16D9F5] hover:underline">Dock it here</button>
               </div>
             )}
 
@@ -6792,6 +6412,23 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         </div>
       )}
 
+      {/* MediaBay window: floats over the monitors and leaves the timeline free as a drop target */}
+      {isMediaBayWindowOpen && (
+        <div className="absolute left-2 right-2 top-10 z-40 h-[52%] min-h-[280px] rounded-lg border border-[#2A3346] shadow-2xl overflow-hidden" data-testid="mediabay-window">
+          <MediaBay
+            layout="full"
+            items={mediaLibrary as any}
+            setItems={(fn) => onSetMediaLibrary?.(fn as any)}
+            onAdd={(m) => addLibraryItemAt(m, playheadTime)}
+            onDragStartItem={(e, m) => handleMediaRowDragStart(e, m)}
+            onDragEndItem={handleDragEnd}
+            onImportFiles={(files) => processImportedFiles(files, { autoSelectInMonitor: false })}
+            onCollapse={() => setIsMediaBayWindowOpen(false)}
+            isImporting={isImportingMedia}
+          />
+        </div>
+      )}
+
       {/* Hidden File Input for Custom Uploads */}
       <input
         ref={fileInputRef}
@@ -6807,6 +6444,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       {/* ========================================================================= */}
             {!isMonitorMode ? (
         <EditorTopBar
+          onSaveProject={handleSaveProject}
           projectName={activeProject?.name || projectNameInput || "ClipFlow Project"}
           onRenameProject={(name) => {
             setProjectNameInput(name);
@@ -8363,9 +8001,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           )}
 
           {/* Safe Area Guides */}
-          <div className="absolute inset-2 border border-dashed border-white/10 pointer-events-none rounded-lg flex items-end justify-center pb-1">
-            <span className="text-[7px] text-white/30 font-mono uppercase">Safe Zone</span>
-          </div>
+          {showSafeZones && (
+            <div className="absolute inset-0 pointer-events-none z-20 select-none">
+              <div className="absolute inset-[5%] border border-white/20 border-dashed rounded-xs" />
+              <div className="absolute inset-[10%] border border-white/10 rounded-xs flex items-end justify-center pb-1">
+                <span className="text-[7px] text-white/35 font-mono uppercase tracking-wider">Safe Zone</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -8475,7 +8118,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               onClick={() => setShowSafeZones((prev) => !prev)}
               className={`h-6 px-1.5 rounded text-[10px] font-medium flex items-center gap-1 cursor-pointer transition-colors border ${
                 showSafeZones
-                  ? "bg-[#168CFF]/20 text-[#16D9F5] border-[#16D9F5]/40"
+                  ? "bg-[#242A36] text-[#D7DCE5] border-[#3A4351] shadow-[inset_0_-1px_0_0_rgba(148,158,174,0.85)]"
                   : "bg-[#141A25] text-gray-400 hover:text-white border-[#212735]"
               }`}
               title="Toggle Safe Zones Guide Overlay"
@@ -10391,32 +10034,21 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                   const rawTime = Math.max(0, dropX / zoomLevel);
                   const dropTime = Number(getSnappedTime(rawTime).toFixed(2));
 
-                  let targetTrackId = "track_video";
-                  if (asset.type === "broll" || asset.type === "image") targetTrackId = "track_broll";
-                  if (asset.type === "music" || asset.type === "sfx" || asset.type === "voice") targetTrackId = "track_music";
-                  if (asset.type === "text") targetTrackId = "track_text";
-                  if (asset.type === "captions") targetTrackId = "track_captions";
-
-                  const newItem: TimelineItem = {
-                    id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                    trackId: targetTrackId,
-                    name: asset.title || asset.name || "New Clip",
-                    type: asset.type || "video",
-                    startTime: dropTime,
-                    duration: asset.durationSec || (asset.type === "image" ? 5 : 6),
-                    sourceStartTime: 0,
-                    sourceUrl: asset.sourceUrl,
-                    volume: asset.type === "music" ? 40 : 100,
-                    speed: 1.0,
-                    cropMode: "face_track",
-                    text: asset.text,
-                    color: asset.type === "text" ? "#ffffff" : undefined,
-                  };
-                  pushHistory([...items, newItem]);
-                  setSelectedItemId(newItem.id);
-                  setPlayheadTime(dropTime);
-                  if (videoRef.current) videoRef.current.currentTime = dropTime;
-                  showToast(`Dropped "${newItem.name}" onto timeline at ${dropTime.toFixed(1)}s`);
+                  const kind = mediaKindOf(asset.type);
+                  if (kind === "text" || kind === "captions") {
+                    const { trackId } = resolveTrack(kind);
+                    const newItem: TimelineItem = {
+                      id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      trackId, name: asset.title || asset.name || "Title", type: kind, startTime: dropTime,
+                      duration: asset.durationSec || 4, sourceStartTime: 0, text: asset.text, color: "#ffffff",
+                    };
+                    pushHistory([...items, newItem]);
+                    setSelectedItemId(newItem.id);
+                  } else {
+                    const placedItem = addLibraryItemAt(asset, dropTime);
+                    setPlayheadTime(placedItem.startTime);
+                    if (videoRef.current) videoRef.current.currentTime = placedItem.startTime;
+                  }
                 }
               } catch (err) {
                 console.error("Drop error:", err);
@@ -10744,6 +10376,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 return (
                   <div
                     key={track.id}
+                    data-track-id={track.id}
+                    data-track-type={track.type}
                     onDragOver={(e) => handleTrackDragOver(e, track)}
                     onDragLeave={(e) => handleTrackDragLeave(e, track.id)}
                     onDrop={(e) => handleTrackDrop(e, track)}
@@ -10814,6 +10448,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                       return (
                         <div
                           key={item.id}
+                          data-item-id={item.id}
+                          data-item-track={item.trackId}
+                          data-item-start={item.startTime}
                           onClick={(e) => {
                             e.stopPropagation();
 
