@@ -106,10 +106,13 @@ export function pullState(): Promise<void> {
   });
 }
 
-function keyOf(item: any, i: number): string {
+// Collections that hold one row per workspace and have no id.
+const ONE_PER_WORKSPACE = new Set(["credit_balances"]);
+function keyOf(item: any, i: number, collection = ""): string {
   if (item && typeof item === "object") {
     if (item.id != null) return `id:${item.id}`;
     if (item.token != null) return `token:${item.token}`;
+    if (ONE_PER_WORKSPACE.has(collection) && item.workspaceId != null) return `ws:${item.workspaceId}`;
   }
   return `json:${JSON.stringify(item)}:${i}`;
 }
@@ -128,9 +131,9 @@ export function mergeDocs(base: any, local: any, remote: any): any {
     const r = remote?.[k];
     if (JSON.stringify(b) === JSON.stringify(l)) continue; // untouched here
     if (Array.isArray(l) && (Array.isArray(r) || r === undefined) && (Array.isArray(b) || b === undefined)) {
-      const bMap = new Map<string, any>((b || []).map((x: any, i: number) => [keyOf(x, i), x] as [string, any]));
-      const lMap = new Map<string, any>(l.map((x: any, i: number) => [keyOf(x, i), x] as [string, any]));
-      const result = new Map<string, any>((r || []).map((x: any, i: number) => [keyOf(x, i), x] as [string, any]));
+      const bMap = new Map<string, any>((b || []).map((x: any, i: number) => [keyOf(x, i, k), x] as [string, any]));
+      const lMap = new Map<string, any>(l.map((x: any, i: number) => [keyOf(x, i, k), x] as [string, any]));
+      const result = new Map<string, any>((r || []).map((x: any, i: number) => [keyOf(x, i, k), x] as [string, any]));
       for (const [key, item] of lMap) {
         if (!bMap.has(key) || JSON.stringify(bMap.get(key)) !== JSON.stringify(item)) result.set(key, item);
       }

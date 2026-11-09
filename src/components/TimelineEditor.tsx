@@ -218,6 +218,10 @@ interface TimelineEditorProps {
   onOpenExportModal: () => void;
   activeProject?: Project | null;
   onUpdateProject?: (project: Project) => void;
+  /** Rename the open project (saved on the server). */
+  onRenameProject?: (name: string) => void;
+  /** Delete the open project (asks for confirmation first). */
+  onDeleteProject?: () => void;
   onUpdateTracks?: (tracks: TimelineTrack[]) => void;
   clips?: ClipItem[];
   mediaLibrary?: any[];
@@ -565,6 +569,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   onOpenExportModal,
   activeProject,
   onUpdateProject,
+  onRenameProject: onRenameProjectProp,
+  onDeleteProject,
   onUpdateTracks,
   clips = [],
   mediaLibrary = [],
@@ -2994,11 +3000,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const handleStep = useCallback(
     (stepSec: number) => {
       setPlayheadTime((prev) => {
-        const next = Math.max(0, Math.min(totalDuration, Number((prev + stepSec).toFixed(2))));
-        if (videoRef.current) {
-          videoRef.current.currentTime = next;
-        }
-        return next;
+        return Math.max(0, Math.min(totalDuration, Number((prev + stepSec).toFixed(2))));
       });
     },
     [totalDuration]
@@ -4438,22 +4440,72 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     onOpenExportModal();
   }, [totalDuration, aspectRatio, selectedItem, activeVideoClip, items, onOpenExportModal]);
 
+  // Paused seeks (scrubbing, clicks, stepping) go through one coalescing seeker: while the
+  // video is still decoding one seek, only the newest target is kept and applied as soon as
+  // that seek lands. Stale intermediate seeks are dropped, so after the playhead is released
+  // the monitor goes straight to the released frame instead of replaying older positions.
+  const pendingSeekRef = useRef<number | null>(null);
+  const lastSeekTargetRef = useRef<number | null>(null);
+  // Bumped when a scrub/click is released: that seek goes out at once and cancels
+  // whatever older seek is still decoding, so no stale frame is shown after release.
+  const [seekReleaseTick, setSeekReleaseTick] = useState(0);
+  const handledReleaseTickRef = useRef(0);
+  const handleVideoSeeked = useCallback((ev: Event) => {
+    const vid = ev.currentTarget as HTMLVideoElement | null;
+    const next = pendingSeekRef.current;
+    if (!vid || next == null || vid !== videoRef.current) return;
+    pendingSeekRef.current = null;
+    if (Math.abs(vid.currentTime - next) > 0.01) {
+      lastSeekTargetRef.current = next;
+      vid.currentTime = next;
+    }
+  }, []);
+  const requestPausedSeek = useCallback((t: number) => {
+    const vid = videoRef.current;
+    if (!vid || !Number.isFinite(t)) return;
+    const target = Math.max(0, t);
+    if (vid.seeking) {
+      // Apply the newest target when the in-flight seek lands (listener is added once).
+      pendingSeekRef.current = target;
+      vid.addEventListener("seeked", handleVideoSeeked, { once: true });
+      return;
+    }
+    pendingSeekRef.current = null;
+    if (Math.abs(vid.currentTime - target) > 0.01) {
+      lastSeekTargetRef.current = target;
+      vid.currentTime = target;
+    }
+  }, [handleVideoSeeked]);
+
   // Sync video source & seek when paused or scrubbing
   useEffect(() => {
     if (!videoRef.current) return;
     const vid = videoRef.current;
 
     if (currentVideoSrc && vid.src !== currentVideoSrc && !vid.src.endsWith(currentVideoSrc)) {
+      pendingSeekRef.current = null;
       vid.src = currentVideoSrc;
     }
 
     const isCurrentPlaying = activeMonitorMode === "source" ? sourceIsPlaying : isPlaying;
+    const released = seekReleaseTick !== handledReleaseTickRef.current;
+    handledReleaseTickRef.current = seekReleaseTick;
     if (!isCurrentPlaying) {
-      if (Math.abs(vid.currentTime - targetSourceTime) > 0.05) {
-        vid.currentTime = targetSourceTime;
+      if (released && Number.isFinite(targetSourceTime)) {
+        pendingSeekRef.current = null;
+        const target = Math.max(0, targetSourceTime);
+        // While seeking, currentTime already reports the in-flight target.
+        if (Math.abs(vid.currentTime - target) > 0.01) {
+          lastSeekTargetRef.current = target;
+          vid.currentTime = target; // a new seek replaces the one in flight
+        }
+      } else {
+        requestPausedSeek(targetSourceTime);
       }
+    } else {
+      pendingSeekRef.current = null;
     }
-  }, [currentVideoSrc, targetSourceTime, isPlaying, sourceIsPlaying, activeMonitorMode]);
+  }, [currentVideoSrc, targetSourceTime, isPlaying, sourceIsPlaying, activeMonitorMode, requestPausedSeek, seekReleaseTick]);
 
   // Playhead animation ticker - Forward real-time playback in sync with program monitor
   useEffect(() => {
@@ -4745,26 +4797,15 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     pushHistory(updated);
   };
 
-  // Seek playhead by clicking ruler
-  const handleRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineRulerRef.current) return;
-    const rect = timelineRulerRef.current.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const newTime = Math.max(0, Math.min(totalDuration, clickX / zoomLevel));
-    const rounded = Number(newTime.toFixed(2));
-    setPlayheadTime(rounded);
-    if (videoRef.current) videoRef.current.currentTime = rounded;
-  };
-
   // Drag-to-seek playhead by scrubbing on ruler
   const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineRulerRef.current) return;
+    if (e.button !== 0 || !timelineRulerRef.current) return;
+    e.preventDefault();
     const rect = timelineRulerRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const newTime = Math.max(0, Math.min(totalDuration, clickX / zoomLevel));
     const rounded = Number(newTime.toFixed(2));
     setPlayheadTime(rounded);
-    if (videoRef.current) videoRef.current.currentTime = rounded;
 
     const handleMouseMove = (moveEv: MouseEvent) => {
       if (!timelineRulerRef.current) return;
@@ -4773,12 +4814,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       const moveTime = Math.max(0, Math.min(totalDuration, moveX / zoomLevel));
       const r = Number(moveTime.toFixed(2));
       setPlayheadTime(r);
-      if (videoRef.current) videoRef.current.currentTime = r;
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (upEv: MouseEvent) => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      handleMouseMove(upEv); // land exactly where the mouse was released
+      setSeekReleaseTick((n) => n + 1);
     };
 
     window.addEventListener("mousemove", handleMouseMove);
@@ -4926,7 +4968,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     setSelectedItemId(placed[0].id);
     setHasUnsavedChanges(true);
     setPlayheadTime(placed[0].startTime);
-    if (videoRef.current) videoRef.current.currentTime = placed[0].startTime;
     showToast(
       placed.length === 1
         ? `Imported "${placed[0].name}" to ${lastBadge} at ${placed[0].startTime.toFixed(1)}s`
@@ -5417,7 +5458,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       }
       const placedItem = addLibraryItemAt(asset, dropTime, track);
       setPlayheadTime(placedItem.startTime);
-      if (videoRef.current) videoRef.current.currentTime = placedItem.startTime;
     } catch (err) {
       console.error("Drop handling error:", err);
     }
@@ -6065,7 +6105,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         key={line.id}
                         onClick={() => {
                           setPlayheadTime(line.start);
-                          if (videoRef.current) videoRef.current.currentTime = line.start;
                         }}
                         className={`border rounded-lg p-2.5 cursor-pointer transition-colors ${
                           isActive
@@ -6447,10 +6486,10 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           projectName={activeProject?.name || projectNameInput || "ClipFlow Project"}
           onRenameProject={(name) => {
             setProjectNameInput(name);
-            if (onUpdateProject && activeProject) {
-              onUpdateProject({ ...activeProject, name });
-            }
+            if (onRenameProjectProp) onRenameProjectProp(name);
+            else if (onUpdateProject && activeProject) onUpdateProject({ ...activeProject, name });
           }}
+          onDeleteProject={activeProject && onDeleteProject ? onDeleteProject : undefined}
           aspectRatio={aspectRatio}
           projectResolution={projectResolution}
           projectFps={projectFps}
@@ -10046,7 +10085,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                   } else {
                     const placedItem = addLibraryItemAt(asset, dropTime);
                     setPlayheadTime(placedItem.startTime);
-                    if (videoRef.current) videoRef.current.currentTime = placedItem.startTime;
                   }
                 }
               } catch (err) {
@@ -10057,7 +10095,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             {/* Time Ruler - Pinned sticky at top when tracks scroll vertically */}
             <div
               ref={timelineRulerRef}
-              onClick={handleRulerClick}
+              onMouseDown={handleRulerMouseDown}
               className="sticky top-0 z-30 h-6 border-b cursor-pointer select-none"
               style={{
                 backgroundColor: currentSkinColors.rulerBg,
@@ -10122,7 +10160,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       setPlayheadTime(marker.time);
-                      if (videoRef.current) videoRef.current.currentTime = marker.time;
                       showToast(`Jumped to ${marker.label} (${marker.time.toFixed(2)}s)`);
                     }}
                     title={`Marker: "${marker.label}" (${marker.time.toFixed(2)}s) • Click to jump, Right-click to remove`}
@@ -10173,7 +10210,11 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 minHeight: "100%",
               }}
             >
-              <div className="sticky top-0 w-3 h-3 bg-[#FF4081] rounded-b -translate-x-[5.5px] shadow z-40" />
+              <div
+                className="sticky top-0 w-3 h-3 bg-[#FF4081] rounded-b -translate-x-[5.5px] shadow z-40 pointer-events-auto cursor-ew-resize"
+                data-testid="timeline-playhead-handle"
+                onMouseDown={handleRulerMouseDown}
+              />
             </div>
 
             {/* Magnetic Snapping Subtle Vertical Alignment Guide */}
@@ -10250,7 +10291,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 const clickX = e.clientX - rect.left;
                 const newTime = Math.max(0, Math.min(totalDuration, clickX / zoomLevel));
                 setPlayheadTime(Number(newTime.toFixed(2)));
-                if (videoRef.current) videoRef.current.currentTime = newTime;
               }}
             >
               {effectiveTracks.map((track) => {
@@ -10542,7 +10582,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                               if (playheadTime < item.startTime || playheadTime > item.startTime + item.duration) {
                                 const targetT = Number(item.startTime.toFixed(2));
                                 setPlayheadTime(targetT);
-                                if (videoRef.current) videoRef.current.currentTime = targetT;
                               }
                             }
                           }}
@@ -12457,7 +12496,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         currentTime={playheadTime}
         onJumpToTime={(t) => {
           setPlayheadTime(t);
-          if (videoRef.current) videoRef.current.currentTime = t;
         }}
         onUpdateCaptions={(newCaps) => setCaptionsList(newCaps)}
         onAddCaptionAtPlayhead={() => {
@@ -12488,7 +12526,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         totalDuration={totalDuration}
         onSeek={(t) => {
           setPlayheadTime(t);
-          if (videoRef.current) videoRef.current.currentTime = t;
         }}
         aspectRatio={aspectRatio}
         volume={volume}

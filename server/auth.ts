@@ -215,6 +215,14 @@ export class AuthService {
     return { user: userProfile, token };
   }
 
+  /** Check a local account's password (accounts without a local password return false). */
+  public verifyPassword(user: any, password: string): boolean {
+    if (!user?.passwordHash || !user?.salt || !password) return false;
+    const a = Buffer.from(this.hashPassword(password, user.salt), "hex");
+    const b = Buffer.from(String(user.passwordHash), "hex");
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
   /**
    * Invalidate session token
    */

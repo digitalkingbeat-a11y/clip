@@ -1510,6 +1510,116 @@ app.put("/api/projects/:id", (req: any, res) => {
   res.json({ success: true, project: db.projects[projectIdx] });
 });
 
+// ---- Deleting projects and accounts ----
+const STORAGE_REF_RE = /\/storage\/(uploads|renders|clips|thumbnails|audio|subtitles)\/([^?#"'\s\\]+)/g;
+function storageRefsIn(value: any): Array<{ dir: string; name: string }> {
+  const out = new Map<string, { dir: string; name: string }>();
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  let m: RegExpExecArray | null;
+  STORAGE_REF_RE.lastIndex = 0;
+  while ((m = STORAGE_REF_RE.exec(text))) {
+    let name = m[2];
+    try { name = decodeURIComponent(name); } catch {}
+    name = path.basename(name);
+    if (name && !name.startsWith(".")) out.set(`${m[1]}/${name}`, { dir: m[1], name });
+  }
+  return Array.from(out.values());
+}
+
+/**
+ * Delete storage files (local copy + Blob) that belong to `userId` and that nothing kept
+ * still points at. A file owned by someone else, or with no recorded owner, is never deleted.
+ */
+async function deleteUnreferencedUserFiles(db: any, userId: string, candidates: Array<{ dir: string; name: string }>) {
+  if (!userId || candidates.length === 0) return 0;
+  const stillUsed = JSON.stringify([db.projects || [], db.media || [], db.mediaRecords || [], db.jobs || [], db.scheduledPosts || []]);
+  const ownerOf = (name: string) => {
+    const fo = db.fileOwners?.[name];
+    if (fo) return fo;
+    const rec = (db.mediaRecords || []).find((r: any) => r?.filename === name);
+    return rec?.userId || "";
+  };
+  const doomed: string[] = [];
+  for (const { dir, name } of candidates) {
+    const base = name.endsWith(".jpg") && dir === "thumbnails" ? name.slice(0, -4) : name;
+    if (ownerOf(name) !== userId && ownerOf(base) !== userId) continue;
+    if (stillUsed.includes(name) || stillUsed.includes(base)) continue;
+    const dirPath = (STORAGE_DIRS as any)[dir];
+    if (!dirPath) continue;
+    doomed.push(path.join(dirPath, name));
+    if (dir !== "thumbnails") doomed.push(path.join(STORAGE_DIRS.thumbnails, `${name}.jpg`));
+    if (db.fileOwners) { delete db.fileOwners[name]; delete db.fileOwners[`${name}.jpg`]; }
+  }
+  for (const fp of doomed) {
+    try { if (fs.existsSync(fp)) fs.unlinkSync(fp); } catch {}
+  }
+  await deleteFromBlob(doomed);
+  return doomed.length;
+}
+
+app.delete("/api/projects/:id", async (req: any, res) => {
+  const userId = currentUserId(req);
+  const db = readDb();
+  const project = (db.projects || []).find((p: any) => p.id === req.params.id);
+  if (!project) return res.status(404).json({ success: false, error: "Project not found" });
+  // Strictly the caller's own projects (admins included).
+  if (!userId || project.userId !== userId) return res.status(403).json({ success: false, error: "Unauthorized access to project" });
+
+  const refs = storageRefsIn(project);
+  for (const r of db.mediaRecords || []) {
+    if (r?.projectId === project.id && r.userId === userId && r.filename) refs.push({ dir: r.mediaType === "render" ? "renders" : "clips", name: path.basename(r.filename) });
+  }
+  db.projects = db.projects.filter((p: any) => p !== project);
+  db.mediaRecords = (db.mediaRecords || []).filter((r: any) => !(r?.projectId === project.id && r.userId === userId));
+  db.jobs = (db.jobs || []).filter((j: any) => !(j?.projectId === project.id && j.userId === userId));
+  // Files still in the user's media library (or used by another project) are kept.
+  const removedFiles = await deleteUnreferencedUserFiles(db, userId, refs);
+  writeDb(db);
+  res.json({ success: true, removedFiles });
+});
+
+// Delete the signed-in user's own account and everything that belongs to it.
+// There is no way to target another user here, admins included.
+app.post("/api/account/delete", async (req: any, res) => {
+  const userId = currentUserId(req);
+  const db = readDb();
+  const user = (db.users || []).find((u: any) => u.id === userId);
+  if (!userId || !user) return res.status(404).json({ success: false, error: "Account not found" });
+  const confirmEmail = String(req.body?.confirmEmail || "").trim().toLowerCase();
+  if (!confirmEmail || confirmEmail !== String(user.email || "").trim().toLowerCase()) {
+    return res.status(400).json({ success: false, error: "Type your account email to confirm." });
+  }
+  if (user.passwordHash && !authService.verifyPassword(user, String(req.body?.password || ""))) {
+    return res.status(403).json({ success: false, error: "Wrong password." });
+  }
+
+  const isMine = (it: any) =>
+    !!it && typeof it === "object" && (it.userId === userId || it.ownerId === userId || it.workspaceId === userId || it.user_id === userId);
+  const refs = storageRefsIn([
+    (db.projects || []).filter(isMine),
+    (db.media || []).filter(isMine),
+    (db.mediaRecords || []).filter(isMine).map((r: any) => `/storage/${r.mediaType === "render" ? "renders" : "clips"}/${r.filename}`),
+  ]);
+  for (const [name, owner] of Object.entries(db.fileOwners || {})) {
+    if (owner !== userId) continue;
+    for (const dir of ["uploads", "renders", "clips", "thumbnails", "audio"]) refs.push({ dir, name });
+  }
+  let removedItems = 0;
+  for (const key of Object.keys(db)) {
+    if (!Array.isArray(db[key])) continue;
+    const before = db[key].length;
+    db[key] = key === "users" ? db[key].filter((u: any) => u?.id !== userId) : db[key].filter((it: any) => !isMine(it));
+    removedItems += before - db[key].length;
+  }
+  for (const key of ["googleCalendarConnections", "googleAnalyticsConnections"]) {
+    if (db[key] && typeof db[key] === "object" && !Array.isArray(db[key]) && userId in db[key]) delete db[key][userId];
+  }
+  const removedFiles = await deleteUnreferencedUserFiles(db, userId, refs);
+  for (const [name, owner] of Object.entries(db.fileOwners || {})) if (owner === userId) delete db.fileOwners[name];
+  writeDb(db);
+  res.json({ success: true, removedItems, removedFiles });
+});
+
 // Update clip captions persistently
 app.post("/api/projects/:id/clips/:clipId/captions", (req: any, res) => {
   const { captions } = req.body;
@@ -1549,7 +1659,13 @@ app.post("/api/render-clip", async (req: any, res) => {
     const isSceneExport = Array.isArray(options?.scenes) && options.scenes.length > 0;
     // An unsaved editor timeline can still render when its source file is in the user's library.
     const ownsSource = !!options?.sourceUrl && !!resolveOwnedMediaPath(String(options.sourceUrl), userId, ["uploads", "renders", "clips"]);
-    if (!owned && !isSceneExport && !ownsSource) return res.status(404).json({ success: false, error: "Project not found" });
+    if (!owned && !isSceneExport && !ownsSource) {
+      // Not a lookup miss on the route: the timeline has nothing this user can render.
+      const error = !options?.sourceUrl
+        ? "Add a video clip to the timeline before exporting."
+        : "This clip's source file isn't in your media library anymore. Re-import it and try again.";
+      return res.status(400).json({ success: false, error });
+    }
     const result = await pipelineManager.renderFinalVideo(
       clipId,
       owned ? projectId : "editor",

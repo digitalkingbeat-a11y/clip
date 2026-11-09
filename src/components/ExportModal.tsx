@@ -276,6 +276,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       const timelineStart = scenesPayload ? pieces[0]?.startTime || 0 : mainVideo?.startTime || 0;
       const videoVolume = videoClipGain(mainVideo, timelineTracks || []);
 
+      if (!scenesPayload && !sourceUrl) {
+        clearInterval(progressTimer);
+        throw new Error("Add a video clip to the timeline before exporting.");
+      }
+
       let completed = false;
       try {
         const response = await fetch("/api/render-clip", {
