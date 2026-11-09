@@ -10,17 +10,16 @@ export interface ExportScenePiece {
 
 /**
  * Lay the picture clips out on the timeline, from the earliest clip to the end of the last
- * one. `extent` widens that range (e.g. to cover audio-track clips). Empty space becomes a
- * gap piece (black + silence) so the export keeps the timeline's timing; an overlapping
- * clip is cut where the next one starts.
+ * one. Empty space between clips becomes a gap piece (black + silence) so the export keeps
+ * the timeline's timing; an overlapping clip is cut where the next one starts.
  */
-export function layoutScenePieces(visualItems: any[], extent?: { start?: number; end?: number }): ExportScenePiece[] {
+export function layoutScenePieces(visualItems: any[]): ExportScenePiece[] {
   const sorted = [...visualItems]
     .filter((v) => v && (v.duration || 0) > 0)
     .sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
   const pieces: ExportScenePiece[] = [];
   if (sorted.length === 0) return [];
-  let cursor = Math.min(sorted[0].startTime || 0, extent?.start ?? Infinity);
+  let cursor = sorted[0].startTime || 0;
   sorted.forEach((v, i) => {
     const start = Math.max(cursor, v.startTime || 0);
     if (start - cursor >= MIN_GAP) pieces.push({ startTime: cursor, duration: start - cursor, gap: true });
@@ -33,7 +32,5 @@ export function layoutScenePieces(visualItems: any[], extent?: { start?: number;
       cursor = Math.max(cursor, start);
     }
   });
-  const end = extent?.end ?? 0;
-  if (end - cursor >= MIN_GAP) pieces.push({ startTime: cursor, duration: end - cursor, gap: true });
   return pieces;
 }

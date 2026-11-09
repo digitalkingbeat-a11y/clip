@@ -242,12 +242,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
       // Empty space between picture clips is exported as black + silence, so the render
       // keeps the timeline's timing (and audio-track clips stay in sync).
-      // The export spans every picture and audio-track clip, like the timeline does.
+      // The export runs from the first picture clip to the end of the last one; audio-track
+      // clips that run past it are cut off there (the server trims the mix to the picture).
       const audioClips = collectExportAudioClips(timelineItems || [], timelineTracks || []);
-      const pieces = layoutScenePieces(visualItems, {
-        start: audioClips.length ? Math.min(...audioClips.map((c) => c.startTime)) : undefined,
-        end: audioClips.length ? Math.max(...audioClips.map((c) => c.startTime + c.duration)) : undefined,
-      });
+      const pieces = layoutScenePieces(visualItems);
       const scenesPayload = !isTest && pieces.length > 1
         ? pieces.map((piece, i) => {
             if (piece.gap) {
