@@ -1,3 +1,4 @@
+import os from "os";
 import { execFile, execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -276,7 +277,7 @@ export class FFmpegService {
     }
 
     // Run real micro-conversion to verify pipeline works
-    const tempTestPath = path.join(process.cwd(), "storage", "renders", `readiness_test_${Date.now()}.mp4`);
+    const tempTestPath = path.join(os.tmpdir(), `clipflow_readiness_${process.pid}_${Date.now()}.mp4`);
     try {
       fs.mkdirSync(path.dirname(tempTestPath), { recursive: true });
       await execFileAsync(this.getFFmpegPath(), [

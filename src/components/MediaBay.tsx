@@ -455,6 +455,7 @@ export const MediaBay: React.FC<MediaBayProps> = ({
   const library = useMemo(() => (items || []).filter((m) => m && m.id && m.url && !String(m.url).startsWith("blob:")), [items]);
 
   const loadBins = useCallback(() => {
+    if (!localStorage.getItem("clipflow_auth_token")) return;
     fetch("/api/media-bins")
       .then((r) => r.json())
       .then((d) => d?.success && Array.isArray(d.bins) && setBins(d.bins))

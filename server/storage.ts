@@ -1,8 +1,18 @@
 import fs from "fs";
 import path from "path";
 
-const ROOT_STORAGE = path.join(process.cwd(), "storage");
+// On Vercel only /tmp is writable; it's a per-instance cache that server/cloudSync.ts
+// keeps in step with Postgres (db) and Vercel Blob (media files).
+const ROOT_STORAGE =
+  process.env.CLIPFLOW_STORAGE_DIR || (process.env.VERCEL ? "/tmp/clipflow-storage" : path.join(process.cwd(), "storage"));
 const DB_FILE = path.join(ROOT_STORAGE, "db.json");
+export const DB_FILE_PATH = DB_FILE;
+
+// Bumped on every successful writeDb so the cloud sync knows there's something to save.
+let dbWriteSeq = 0;
+export function getDbWriteSeq(): number {
+  return dbWriteSeq;
+}
 
 // Ensure all required storage subdirectories exist
 export const STORAGE_DIRS = {
@@ -127,6 +137,7 @@ export function writeDb(data: any): void {
     const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
     fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), "utf-8");
     fs.renameSync(tempFile, DB_FILE);
+    dbWriteSeq++;
   } catch (err) {
     console.error("Error writing db.json:", err);
   }

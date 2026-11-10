@@ -1,3 +1,4 @@
+import { downloadHref } from "../utils/downloadHref";
 import React, { useState, useEffect } from "react";
 import {
   X,
@@ -276,6 +277,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       const timelineStart = scenesPayload ? pieces[0]?.startTime || 0 : mainVideo?.startTime || 0;
       const videoVolume = videoClipGain(mainVideo, timelineTracks || []);
 
+      if (!scenesPayload && !sourceUrl) {
+        clearInterval(progressTimer);
+        throw new Error("Add a video clip to the timeline before exporting.");
+      }
+
       let completed = false;
       try {
         const response = await fetch("/api/render-clip", {
@@ -505,7 +511,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <span>5-Second Test Render Playable Preview</span>
                 </div>
                 <a
-                  href={testRenderUrl}
+                  href={downloadHref(testRenderUrl)}
                   download={testRenderFilename}
                   className="px-2.5 py-1 rounded bg-[#168CFF] hover:bg-[#167CE0] text-white font-bold text-[11px] flex items-center gap-1"
                 >
@@ -594,7 +600,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             ) : (
               <a
                 id="btn-download-master-mp4"
-                href={downloadUrl}
+                href={downloadHref(downloadUrl)}
                 download={downloadFilename}
                 target="_blank"
                 rel="noreferrer"

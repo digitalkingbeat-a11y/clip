@@ -1,3 +1,4 @@
+import { downloadHref } from "../utils/downloadHref";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Sparkles,
@@ -2087,7 +2088,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                   </button>
 
                   <a
-                    href={masterVideoUrl || undefined}
+                    href={masterVideoUrl ? downloadHref(masterVideoUrl) : undefined}
                     download={`ClipFlow_${videoTitle.replace(/\s+/g, "_")}.mp4`}
                     aria-disabled={!masterVideoUrl}
                     onClick={(e) => { if (!masterVideoUrl) e.preventDefault(); }}
@@ -2507,7 +2508,7 @@ export const AIVideoGenerator: React.FC<AIVideoGeneratorProps> = ({
                           <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
                             <a
                               id="btn-export-variant-mp4"
-                              href={cur.videoUrl}
+                              href={downloadHref(cur.videoUrl)}
                               download={`ClipFlow_${cur.destination}.mp4`}
                               className="flex-1 min-w-[110px] py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 text-xs font-bold text-center text-white flex items-center justify-center gap-1.5 shadow-sm transition-all"
                             >

@@ -64,7 +64,7 @@ import {
   DEFAULT_CREDIT_PACKS,
   DEFAULT_USAGE_ALLOWANCE,
 } from "./mockData";
-import { Plus, Scissors, Sparkles, Film, ArrowRight, Play, Cpu, AlertCircle, RefreshCw, CheckCircle, Info, X, Radio, LayoutTemplate } from "lucide-react";
+import { Plus, Scissors, Sparkles, Film, ArrowRight, Play, Cpu, AlertCircle, RefreshCw, CheckCircle, Info, X, Radio, LayoutTemplate, Trash2 } from "lucide-react";
 import { MobileBottomNav } from "./components/MobileBottomNav";
 import { MobileEditorView } from "./components/MobileEditorView";
 import { ensureTracksForItems } from "./utils/trackUtils";
@@ -72,6 +72,16 @@ import { PWAInstallModal } from "./components/PWAInstallModal";
 import { OfflineNotice } from "./components/OfflineNotice";
 import { usePWAInstall } from "./hooks/usePWAInstall";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
+import { collectFreshStorageUrls, refreshStorageUrlsInItems } from "./utils/refreshSignedUrls";
+
+// Signed-in API calls are only made when a session token exists (no 401 noise when signed out).
+const hasAuthToken = () => {
+  try {
+    return !!localStorage.getItem("clipflow_auth_token");
+  } catch {
+    return false;
+  }
+};
 
 
 // Media from old demo builds (sample clips, stock test streams). Never shown to users.
@@ -378,13 +388,20 @@ export default function App() {
     fetch("/api/media")
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.media)) setMediaLibrary(data.media);
+        if (data.success && Array.isArray(data.media)) {
+          setMediaLibrary(data.media);
+          // Swap expired signed links in the restored timeline for fresh ones.
+          const fresh = collectFreshStorageUrls(data.media);
+          setTimelineItems((prev) => refreshStorageUrlsInItems(prev, fresh));
+        }
       })
       .catch((err) => console.warn("Failed to fetch media list:", err));
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.projects)) {
+          const fresh = collectFreshStorageUrls(data.projects.map((p: any) => p.timelineItems || []));
+          setTimelineItems((prev) => refreshStorageUrlsInItems(prev, fresh));
           setProjects(data.projects);
           setActiveProject((prev) => (prev ? data.projects.find((p: any) => p.id === prev.id) || null : null));
         }
@@ -416,7 +433,7 @@ export default function App() {
     const lib = firstVisual ? mediaLibrary.find((m) => (m.url || "").split("?")[0] === (firstVisual.sourceUrl || "").split("?")[0]) : undefined;
     const duration = timelineItems.reduce((mx, it) => Math.max(mx, (it.startTime || 0) + (it.duration || 0)), 0);
     const body: any = {
-      name: activeProject?.name || "Untitled project",
+      name: activeProject?.name || pendingProjectNameRef.current || "Untitled project",
       aspectRatio,
       timelineTracks,
       timelineItems,
@@ -439,6 +456,67 @@ export default function App() {
     setActiveProject(saved);
     setProjects((prev) => [saved, ...prev.filter((p) => p.id !== saved.id && p.id !== activeProject?.id)]);
     return saved;
+  };
+
+  // Rename the open project on the server and refresh the project list.
+  const pendingProjectNameRef = useRef<string>("");
+  const refreshProjects = async () => {
+    if (!hasAuthToken()) return;
+    try {
+      const data = await fetch("/api/projects").then((r) => r.json());
+      if (data?.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        setActiveProject((prev) => (prev ? data.projects.find((p: any) => p.id === prev.id) || prev : prev));
+      }
+    } catch {}
+  };
+  const handleRenameProject = async (name: string) => {
+    const clean = name.trim().slice(0, 120);
+    if (!clean) return;
+    const proj = activeProject;
+    if (!proj) {
+      pendingProjectNameRef.current = clean; // used when the timeline is first saved
+      return;
+    }
+    setActiveProject({ ...proj, name: clean });
+    setProjects((prev) => prev.map((p) => (p.id === proj.id ? { ...p, name: clean } : p)));
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(proj.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: clean }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) throw new Error(data?.error || `HTTP ${res.status}`);
+    } catch (err: any) {
+      console.warn("Rename failed:", err?.message);
+      alert(`Couldn't save the new name: ${err?.message || "error"}`);
+    }
+    await refreshProjects();
+  };
+  const handleDeleteProject = async (proj: Project | null | undefined) => {
+    if (!proj) return;
+    if (!window.confirm(`Delete "${proj.name || "Untitled project"}"? Its renders are deleted too. Media in your library stays. This can't be undone.`)) return;
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(proj.id)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 404) throw new Error(data?.error || `HTTP ${res.status}`);
+    } catch (err: any) {
+      alert(`Couldn't delete the project: ${err?.message || "error"}`);
+      return;
+    }
+    setProjects((prev) => prev.filter((p) => p.id !== proj.id));
+    if (activeProject?.id === proj.id) {
+      setActiveProject(null);
+      setTimelineItems([]);
+      setTimelineTracks(INITIAL_TIMELINE_TRACKS);
+      try {
+        localStorage.removeItem("clipflow_active_project");
+        localStorage.removeItem("clipflow_editor_timeline_items");
+      } catch {}
+      if (currentView === "editor") setCurrentView("projects");
+    }
+    await refreshProjects();
   };
 
   const openProject = (p: Project) => {
@@ -491,10 +569,9 @@ export default function App() {
       console.warn("Could not restore state from localStorage:", e);
     }
 
-    fetch("/api/projects")
-      .then((res) => res.json())
+    (hasAuthToken() ? fetch("/api/projects").then((res) => res.json()) : Promise.resolve(null))
       .then((data) => {
-        if (data.success && Array.isArray(data.projects)) {
+        if (data?.success && Array.isArray(data.projects)) {
           setProjects(data.projects);
           setActiveProject(data.projects[0] || null);
         }
@@ -592,7 +669,7 @@ export default function App() {
   const fetchBillingData = async () => {
     try {
       const [usageRes, plansRes, packsRes] = await Promise.all([
-        safeFetchJson("/api/billing/usage"),
+        hasAuthToken() ? safeFetchJson("/api/billing/usage") : Promise.resolve(null),
         safeFetchJson("/api/billing/plans"),
         safeFetchJson("/api/billing/credit-packs"),
       ]);
@@ -1009,6 +1086,7 @@ export default function App() {
 
   // 1. Initial persistent projects fetch from server disk storage
   useEffect(() => {
+    if (!hasAuthToken()) return;
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data) => {
@@ -1393,6 +1471,7 @@ export default function App() {
               scheduledPosts={scheduledPosts}
               onNavigate={(v) => setCurrentView(v)}
               onSelectProject={(p) => openProject(p)}
+              onDeleteProject={(p) => handleDeleteProject(p)}
               onOpenClip={(c) => {
                 handleOpenClipInEditor(c);
               }}
@@ -1713,6 +1792,8 @@ export default function App() {
                     setActiveProject(proj);
                     setProjects((prev) => prev.map((p) => (p.id === proj.id ? proj : p)));
                   }}
+                  onRenameProject={handleRenameProject}
+                  onDeleteProject={() => handleDeleteProject(activeProject)}
                   onUpdateTracks={setTimelineTracks}
                   onToggleMonitorMode={(active) => setIsMonitorMode(active)}
                   onNavigateToAstraPost={() => setCurrentView("astra_post")}
@@ -1805,6 +1886,19 @@ export default function App() {
                     >
                       <div className="aspect-video bg-black rounded-lg overflow-hidden relative mb-2">
                         <img src={proj.sourceThumbnail} alt={proj.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                        <button
+                          type="button"
+                          title="Delete project"
+                          aria-label={`Delete ${proj.name}`}
+                          data-testid="project-delete"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteProject(proj);
+                          }}
+                          className="absolute top-1.5 right-1.5 p-1 rounded bg-black/70 text-gray-300 hover:text-rose-300 hover:bg-rose-950/80 border border-white/10 opacity-70 group-hover:opacity-100 transition-opacity cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                         <span className="absolute bottom-1.5 right-1.5 text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/80 text-white">
                           {Math.floor((Number(proj.duration) || 0) / 60)}m {Math.round((Number(proj.duration) || 0) % 60)}s
                         </span>

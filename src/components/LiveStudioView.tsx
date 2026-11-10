@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { uploadMediaFiles } from "../utils/mediaUpload";
 import {
   Radio,
   Video,
@@ -759,36 +760,31 @@ export const LiveStudioView: React.FC<LiveStudioViewProps> = ({
       const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
       const videoBlobUrl = URL.createObjectURL(blob);
 
-      // Generate thumbnail snapshot from canvas
-      const canvas = canvasRef.current;
-      const thumbnail = canvas ? canvas.toDataURL("image/jpeg", 0.75) : undefined;
-
       const durationSec = Math.max(1, recordingDuration);
-      const title = `Live Studio Recording - ${new Date().toLocaleDateString("en-US", {
+      const stamp = new Date();
+      const title = `Live Studio Recording - ${stamp.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
       })}`;
+      const fileName = `Live_Recording_${stamp.toISOString().slice(0, 19).replace(/[:T]/g, "-")}.webm`;
 
-      // POST to backend Media Library endpoint
-      const res = await fetch("/api/live/recordings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // Upload the recording itself to the Media Library (straight to cloud storage on Vercel).
+      const res = await uploadMediaFiles([new File([blob], fileName, { type: "video/webm" })], { library: true });
+      const data = await res.json().catch(() => ({}));
+      const item = data?.mediaItems?.[0];
+      if (res.ok && data.success && item) {
+        setLastSavedRecording({
+          id: item.id,
           title,
-          duration: durationSec,
-          videoDataUrl: videoBlobUrl,
-          thumbnailUrl: thumbnail,
-          folder: "Live Recordings",
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success && data.item) {
-        setLastSavedRecording({ ...data.item, localBlobUrl: videoBlobUrl });
+          url: item.url,
+          duration: item.duration || durationSec,
+          thumbnail: item.thumbnail,
+          localBlobUrl: videoBlobUrl,
+        });
         setShowPostRecordingModal(true);
-        setBannerSuccess(`Recording automatically saved to Media Library! ("${title}")`);
+        setBannerSuccess(`Recording saved to Media Library ("${title}")`);
       } else {
         throw new Error(data.error || "Failed to persist recording to library.");
       }

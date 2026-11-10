@@ -3,6 +3,7 @@ import { Play, Pause, Undo2, Redo2, Download, Plus, Split, Type, Gauge, Volume2,
 import { MediaBay } from "./MediaBay";
 import { useTimelineAudio } from "../hooks/useTimelineAudio";
 import { AspectRatio, BrandKit, TimelineItem, TimelineTrack, Project, MediaItem, TrackType } from "../types";
+import { uploadMediaFiles } from "../utils/mediaUpload";
 
 /**
  * Phone editor (< 768px). Preview on top, a real multi-track timeline below, a compact tool strip
@@ -141,16 +142,39 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   const isImage = active && (active.type === "image" || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(active.sourceUrl || ""));
   const sourceTime = (it: TimelineItem, t: number) => (it.sourceStartTime || 0) + (t - it.startTime) * (it.speed || 1);
 
+  // Paused seeks are frame-accurate and coalesced: while one seek is decoding only the newest
+  // target is kept; releasing the ruler seeks at once and replaces any older seek in flight,
+  // so the released frame shows without a stale one first.
+  const pendingSeek = useRef<number | null>(null);
+  const [releaseTick, setReleaseTick] = useState(0);
+  const handledRelease = useRef(0);
+  const onSeeked = (ev: Event) => {
+    const v = ev.currentTarget as HTMLVideoElement;
+    const next = pendingSeek.current;
+    pendingSeek.current = null;
+    if (next != null && v === videoRef.current && Math.abs(v.currentTime - next) > 0.01) v.currentTime = next;
+  };
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !active || isImage) return;
     const want = sourceTime(active, playhead);
-    if (Math.abs(v.currentTime - want) > 0.35) { try { v.currentTime = want; } catch {} }
+    const released = releaseTick !== handledRelease.current;
+    handledRelease.current = releaseTick;
+    if (playing) {
+      pendingSeek.current = null;
+      if (Math.abs(v.currentTime - want) > 0.35) { try { v.currentTime = want; } catch {} }
+    } else if (released || !v.seeking) {
+      pendingSeek.current = null;
+      if (Math.abs(v.currentTime - want) > 0.01) { try { v.currentTime = want; } catch {} }
+    } else {
+      pendingSeek.current = want;
+      v.addEventListener("seeked", onSeeked, { once: true });
+    }
     v.playbackRate = active.speed || 1;
     v.volume = Math.max(0, Math.min(1, (active.volume ?? 100) / 100));
     if (playing && v.paused) v.play().catch(() => {});
     if (!playing && !v.paused) v.pause();
-  }, [active?.id, active?.sourceUrl, playhead, playing]);
+  }, [active?.id, active?.sourceUrl, playhead, playing, releaseTick]);
 
   useEffect(() => {
     if (!playing) return;
@@ -262,9 +286,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
   // ---------- Tools ----------
   // Files go into the user's server library first (so they survive reloads and can be exported).
   const uploadFiles = async (files: File[]): Promise<MediaItem[]> => {
-    const fd = new FormData();
-    for (const f of files) fd.append("files", f, f.name);
-    const res = await fetch("/api/upload?library=1", { method: "POST", body: fd });
+    const res = await uploadMediaFiles(files, { library: true });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401) throw new Error("Sign in to import media.");
     if (!res.ok || !data?.success) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);
@@ -466,6 +488,7 @@ export const MobileEditorView: React.FC<MobileEditorViewProps> = ({
             style={{ touchAction: "none" }}
             onPointerDown={(e) => { (e.currentTarget as Element).setPointerCapture(e.pointerId); setPlaying(false); seekFromEvent(e); }}
             onPointerMove={(e) => { if (e.buttons || e.pointerType === "touch") seekFromEvent(e); }}
+            onPointerUp={(e) => { seekFromEvent(e); setReleaseTick((n) => n + 1); }}
             aria-label="Timeline ruler"
           >
             {Array.from({ length: timelineSeconds + 1 }).map((_, s) => {

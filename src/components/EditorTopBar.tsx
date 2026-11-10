@@ -50,6 +50,7 @@ import {
   ChevronRight,
   RefreshCw,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { EditorWorkspaceLayout, PreviewZoomMode } from "../types";
 import { WaveformDisplayMode } from "./AudioWaveformVisualizer";
@@ -105,6 +106,7 @@ export interface EditorTopBarProps {
   // Professional NLE top bar additions
   hasUnsavedChanges?: boolean;
   onSaveProject?: () => void;
+  onDeleteProject?: () => void;
   isPlaying?: boolean;
   onTogglePlayPause?: () => void;
   onStep?: (delta: number) => void;
@@ -172,6 +174,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   showToast,
   hasUnsavedChanges = false,
   onSaveProject,
+  onDeleteProject,
   isPlaying = false,
   onTogglePlayPause,
   onStep,
@@ -418,6 +421,19 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Close Project</span>
               </button>
+              {onDeleteProject && (
+                <button
+                  data-testid="editor-delete-project"
+                  onClick={() => {
+                    closeMenu();
+                    onDeleteProject();
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg flex items-center gap-2 hover:bg-rose-950/40 text-rose-400 hover:text-rose-200 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Project…</span>
+                </button>
+              )}
             </div>
           )}
         </div>

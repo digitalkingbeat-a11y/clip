@@ -9,6 +9,7 @@ import {
   Radio,
   Clock,
   Film,
+  Trash2,
 } from "lucide-react";
 import { Project, ClipItem, ScheduledPost, ViewMode, Plan, UsageAllowance, Subscription, CreditBalance } from "../types";
 import { useLanguage } from "../i18n/LanguageContext";
@@ -19,6 +20,7 @@ interface DashboardViewProps {
   scheduledPosts?: ScheduledPost[];
   onNavigate: (view: ViewMode) => void;
   onSelectProject: (project: Project) => void;
+  onDeleteProject?: (project: Project) => void;
   onOpenClip?: (clip: ClipItem) => void;
   onStartUpload: () => void;
   onStartPromptToVideo: () => void;
@@ -35,6 +37,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   projects,
   onNavigate,
   onSelectProject,
+  onDeleteProject,
   onStartUpload,
   onStartPromptToVideo,
 }) => {
@@ -203,6 +206,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     />
                     <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors" />
                     
+                    {onDeleteProject && (
+                      <button
+                        type="button"
+                        title="Delete project"
+                        aria-label={`Delete ${proj.name}`}
+                        data-testid="project-delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteProject(proj);
+                        }}
+                        className="absolute top-1.5 right-1.5 z-10 p-1 rounded bg-black/70 text-gray-300 hover:text-rose-300 hover:bg-rose-950/80 border border-white/10 opacity-70 group-hover:opacity-100 transition-opacity cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+
                     {/* Aspect Ratio Badge */}
                     <span className="absolute top-1.5 left-1.5 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-black/85 text-gray-200 border border-white/10 backdrop-blur-xs">
                       {proj.aspectRatio}

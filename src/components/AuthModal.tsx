@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { User, LogIn, UserPlus, LogOut, Check, X, Shield, Lock, Mail, AlertCircle, Smartphone } from "lucide-react";
+import { User, LogIn, UserPlus, LogOut, Check, X, Shield, Lock, Mail, AlertCircle, Smartphone, Trash2 } from "lucide-react";
 import { UserProfile } from "../types";
 import { AVATAR_PLACEHOLDER } from "../utils/placeholders";
 
@@ -28,8 +28,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteEmail, setDeleteEmail] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
 
   if (!isOpen) return null;
+
+  const handleDeleteAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setErrorMsg(null);
+    if (deleteEmail.trim().toLowerCase() !== String(currentUser.email || "").trim().toLowerCase()) {
+      setErrorMsg("Type your account email exactly to confirm.");
+      return;
+    }
+    if (!window.confirm("Delete your account, all your projects and media? This can't be undone.")) return;
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/account/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmEmail: deleteEmail.trim(), password: deletePassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      localStorage.removeItem("clipflow_auth_token");
+      localStorage.removeItem("clipflow_user_profile");
+      clearCachedWorkspaceData();
+      setSuccessMsg("Account deleted.");
+      onUserUpdate(null);
+      setTimeout(() => onClose(), 800);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Couldn't delete the account.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -198,6 +232,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <LogOut className="w-4 h-4" />
                 <span>{isLoading ? "Signing Out..." : "Sign Out of Account"}</span>
               </button>
+
+              {!showDelete ? (
+                <button
+                  type="button"
+                  data-testid="account-delete-open"
+                  onClick={() => setShowDelete(true)}
+                  className="w-full text-center text-[11px] text-gray-500 hover:text-rose-300 cursor-pointer"
+                >
+                  Delete account…
+                </button>
+              ) : (
+                <form onSubmit={handleDeleteAccount} className="p-3 rounded-xl border border-rose-500/30 bg-rose-950/20 space-y-2">
+                  <p className="text-[11px] text-rose-200">
+                    Deletes your account, projects, media and renders. Type <b>{currentUser.email}</b> to confirm.
+                  </p>
+                  <input
+                    type="email"
+                    data-testid="account-delete-email"
+                    value={deleteEmail}
+                    onChange={(e) => setDeleteEmail(e.target.value)}
+                    placeholder="your email"
+                    autoComplete="off"
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-[#0D111A] border border-[#2A3142] text-white text-xs"
+                  />
+                  <input
+                    type="password"
+                    data-testid="account-delete-password"
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    placeholder="password"
+                    autoComplete="current-password"
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-[#0D111A] border border-[#2A3142] text-white text-xs"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDelete(false);
+                        setDeleteEmail("");
+                        setDeletePassword("");
+                      }}
+                      className="flex-1 py-1.5 rounded-lg border border-[#2A3142] text-gray-300 text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      data-testid="account-delete-confirm"
+                      disabled={isLoading || !deleteEmail}
+                      className="flex-1 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete forever</span>
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           ) : (
             /* Sign In / Sign Up Form */

@@ -10,6 +10,9 @@ import { GoogleGenAI } from "@google/genai";
 
 import { initStorage, readDb, writeDb, STORAGE_DIRS } from "./server/storage";
 import { ffmpegService } from "./server/ffmpeg";
+import { cloudEnabled, cloudSyncMiddleware, streamFromBlob, deleteFromBlob, presignedBlobUrl, blobPathForLocal, deleteBlobFolder } from "./server/cloudSync";
+import { handleUpload } from "@vercel/blob/client";
+import { get as getBlob, del as delBlob, head as headBlob } from "@vercel/blob";
 import { transcriptionService } from "./server/transcription";
 import { clipAnalyzer } from "./server/clipAnalyzer";
 import { pipelineManager } from "./server/pipeline";
@@ -76,6 +79,10 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// Serverless hosting: load the db from Postgres before each request and save it (plus new
+// media files, to Vercel Blob) before the response goes out. No-op when running locally.
+app.use(cloudSyncMiddleware());
+
 // Clients send back the signed file links they were given; keep plain /storage/... paths
 // in the database and in everything the server-side pipeline reads.
 // (Webhooks verify against req.rawBody, which is captured before this runs.)
@@ -95,6 +102,17 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+const MEDIA_MIME: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+  ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".wav": "audio/wav", ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+  ".gif": "image/gif", ".svg": "image/svg+xml",
+};
+function mimeTypeFor(p: string): string {
+  return MEDIA_MIME[path.extname(p).toLowerCase()] || "application/octet-stream";
+}
 
 // Robust Media Streaming Handler with HTTP 206 Range, MIME resolution, and CORS
 const streamMediaFile = (filePath: string, req: express.Request, res: express.Response) => {
@@ -210,7 +228,26 @@ async function serveSignedStorageFile(storagePath: string, query: Record<string,
   if (!check.ok && !(await bearerUserOwns(req, path.basename(safePath)))) {
     return storageAccessDenied(res, check.reason);
   }
+  if (cloudEnabled && req.method === "GET") {
+    // Cloud: send the browser straight to a short-lived, read-only presigned Blob URL for
+    // this one file, so big media never flows through a function response (4.5 MB cap).
+    const url = await presignedBlobUrl(safePath, { download: String(query?.download || "") === "1" }).catch((e: any) => {
+      console.warn("[storage] presign failed:", e?.message);
+      return null;
+    });
+    if (url) {
+      res.setHeader("Cache-Control", "private, max-age=300");
+      res.setHeader("Referrer-Policy", "no-referrer");
+      return res.redirect(302, url);
+    }
+    if (!fs.existsSync(safePath)) return res.status(404).json({ success: false, error: "Media file not found." });
+  }
   if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
+    // Not on this instance's disk: stream it from cloud storage (Vercel Blob).
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (await streamFromBlob(safePath, req, res, mimeTypeFor(safePath))) return;
     return res.status(404).json({ success: false, error: "Media file not found." });
   }
   res.setHeader("Cache-Control", "private, max-age=3600");
@@ -356,7 +393,7 @@ const PUBLIC_API_PATTERNS: RegExp[] = [
   /^\/api\/billing\/(plans|credit-packs|webhook)$/,
   /^\/api\/oauth\/google\/callback$/,
   /^\/api\/integrations\/google\/calendar\/webhook$/,
-  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks))?$/,
+  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks|chunks\/token|chunks\/complete))?$/,
 ];
 function isPublicApiRequest(req: any): boolean {
   const p = req.path || "";
@@ -639,6 +676,64 @@ app.post("/api/podcast/sessions/:id/chunks", podcastChunkUpload.single("chunk"),
   } catch (err: any) {
     const status = podcastErrorStatus(err, 500);
     if (status >= 500) console.error("Error saving chunk:", err);
+    res.status(status).json({ success: false, error: err.message });
+  }
+});
+
+// 6b. Cloud (Vercel): chunks go browser -> Blob directly (function bodies are capped at 4.5 MB).
+// The token is only issued for this session's own participant folder and exact chunk name.
+const PODCAST_CHUNK_MAX_BYTES = 100 * 1024 * 1024;
+const PODCAST_CHUNK_TYPES = ["video/webm", "audio/webm", "video/mp4", "audio/mp4", "audio/ogg", "audio/wav"];
+function podcastChunkFields(src: any) {
+  const idxRaw = String(src?.chunkIndex ?? "");
+  return {
+    participantId: String(src?.participantId || ""),
+    trackType: String(src?.trackType || "video"),
+    chunkIndex: /^\d{1,6}$/.test(idxRaw) ? Number(idxRaw) : NaN,
+    ext: src?.ext ? String(src.ext) : ".webm",
+  };
+}
+app.post("/api/podcast/sessions/:id/chunks/token", async (req: any, res) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const sessionId = String(req.params.id || "");
+  try {
+    const result = await handleUpload({
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async (pathname: string, clientPayload: string | null) => {
+        let payload: any = {};
+        try {
+          payload = JSON.parse(clientPayload || "{}");
+        } catch {}
+        const f = podcastChunkFields(payload);
+        const target = podcastService.chunkTarget(sessionId, f.participantId, f.trackType, f.chunkIndex, f.ext);
+        if (pathname !== blobPathForLocal(target.chunkFile)) throw new PodcastError(400, "Invalid chunk path.");
+        return {
+          allowedContentTypes: PODCAST_CHUNK_TYPES,
+          maximumSizeInBytes: PODCAST_CHUNK_MAX_BYTES,
+          addRandomSuffix: false,
+          allowOverwrite: true, // a retried chunk replaces its own earlier copy
+        };
+      },
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(podcastErrorStatus(err, 400)).json({ success: false, error: err?.message || "Upload could not be started." });
+  }
+});
+app.post("/api/podcast/sessions/:id/chunks/complete", async (req: any, res) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const sessionId = String(req.params.id || "");
+  try {
+    const f = podcastChunkFields(req.body);
+    const target = podcastService.chunkTarget(sessionId, f.participantId, f.trackType, f.chunkIndex, f.ext);
+    const meta: any = await headBlob(blobPathForLocal(target.chunkFile) as string).catch(() => null);
+    if (!meta || !(meta.size > 0)) return res.status(404).json({ success: false, error: "Chunk upload not found. Please retry." });
+    if (meta.size > PODCAST_CHUNK_MAX_BYTES) return res.status(413).json({ success: false, error: "Chunk is too large." });
+    res.json(podcastService.recordChunk(sessionId, f.participantId, f.chunkIndex, target.relPath));
+  } catch (err: any) {
+    const status = podcastErrorStatus(err, 500);
+    if (status >= 500) console.error("Error recording chunk:", err);
     res.status(status).json({ success: false, error: err.message });
   }
 });
@@ -932,6 +1027,113 @@ app.post(
   (req: any, res: any) => handleUploadedFiles(req, res)
 );
 
+// Direct-to-cloud uploads (Vercel): function request bodies are capped at 4.5 MB, so the
+// browser uploads each file straight to Vercel Blob (incoming/<userId>/...), then asks
+// /api/upload/from-blob to import it. Locally the classic multipart /api/upload is used.
+app.get("/api/upload/config", (req: any, res: any) => {
+  res.json({ success: true, direct: cloudEnabled });
+});
+
+// A Vercel function has ~500 MB of /tmp for the imported file, its thumbnail and renders.
+const UPLOAD_MAX_MB = Number(process.env.CLIPFLOW_MAX_UPLOAD_MB) || (process.env.VERCEL ? 450 : 2048);
+const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
+const UPLOAD_MAX_LABEL = UPLOAD_MAX_MB >= 1024 ? `${Math.round(UPLOAD_MAX_MB / 1024)} GB` : `${UPLOAD_MAX_MB} MB`;
+const MEDIA_EXTS = new Set([
+  ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi",
+  ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac",
+  ".png", ".jpg", ".jpeg", ".webp", ".gif",
+]);
+app.post("/api/blob/upload", async (req: any, res: any) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const userId = currentUserId(req);
+  if (!userId) return res.status(401).json({ success: false, error: "Please sign in to continue." });
+  try {
+    const result = await handleUpload({
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async (pathname: string) => {
+        if (!pathname.startsWith(`incoming/${userId}/`)) throw new Error("Invalid upload path.");
+        return {
+          allowedContentTypes: ["video/*", "audio/*", "image/png", "image/jpeg", "image/webp", "image/gif", "application/octet-stream"],
+          maximumSizeInBytes: UPLOAD_MAX_BYTES,
+          addRandomSuffix: true,
+        };
+      },
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || "Upload could not be started." });
+  }
+});
+
+app.post("/api/upload/from-blob", async (req: any, res: any) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const userId = currentUserId(req);
+  const list: any[] = Array.isArray(req.body?.files) ? req.body.files.slice(0, 20) : [];
+  if (!list.length) return res.status(400).json({ success: false, error: "No media files provided." });
+  const files: any[] = [];
+  try {
+    for (const f of list) {
+      const pathname = String(f?.pathname || "");
+      if (!pathname.startsWith(`incoming/${userId}/`) || pathname.includes("..")) {
+        return res.status(403).json({ success: false, error: "That upload doesn't belong to you." });
+      }
+      const blob: any = await getBlob(pathname, { access: "private", useCache: false });
+      if (!blob || blob.statusCode !== 200 || !blob.stream) {
+        return res.status(404).json({ success: false, error: "Upload not found. Please try again." });
+      }
+      const originalname = String(f?.originalname || path.basename(pathname)).slice(0, 200);
+      const blobType = String(blob.blob?.contentType || "");
+      if (Number(blob.blob?.size || 0) > UPLOAD_MAX_BYTES) {
+        await delBlob(pathname).catch(() => {});
+        return res.status(413).json({ success: false, error: `File is larger than ${UPLOAD_MAX_LABEL}.` });
+      }
+      if (!MEDIA_EXTS.has(path.extname(originalname).toLowerCase()) || !/^(video\/|audio\/|image\/(png|jpe?g|webp|gif)$|application\/octet-stream)/.test(blobType || "application/octet-stream")) {
+        await delBlob(pathname).catch(() => {});
+        return res.status(415).json({ success: false, error: "Invalid file format. Please upload video, audio, or image media files." });
+      }
+      const safe = originalname.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
+      const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${safe}`);
+      const { Readable } = await import("stream");
+      const { pipeline } = await import("stream/promises");
+      await pipeline(Readable.fromWeb(blob.stream), fs.createWriteStream(filePath));
+      await delBlob(pathname).catch(() => {});
+      files.push({ originalname, path: filePath, size: fs.statSync(filePath).size, mimetype: String(blob.blob?.contentType || f?.mimetype || "") });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || "Couldn't import the upload." });
+  }
+  req.files = files;
+  return handleUploadedFiles(req, res);
+});
+
+// Only fetch links on the public internet (no localhost, private networks or cloud metadata).
+async function isPublicHost(hostname: string): Promise<boolean> {
+  const net = await import("net");
+  const dns = await import("dns/promises");
+  const host = hostname.replace(/^\[|\]$/g, "");
+  if (!host || /^(localhost|.*\.local|.*\.internal)$/i.test(host)) return false;
+  let addrs: string[] = [];
+  if (net.isIP(host)) addrs = [host];
+  else {
+    try {
+      addrs = (await dns.lookup(host, { all: true })).map((a) => a.address);
+    } catch {
+      return false;
+    }
+  }
+  const priv = (ip: string) => {
+    if (net.isIPv4(ip)) {
+      const [a, b] = ip.split(".").map(Number);
+      return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+    }
+    const v = ip.toLowerCase();
+    if (v.startsWith("::ffff:")) return priv(v.slice(7));
+    return v === "::1" || v === "::" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80");
+  };
+  return addrs.length > 0 && !addrs.some(priv);
+}
+
 // Import a video from a direct link (e.g. https://.../video.mp4) and run the same clip pipeline.
 // Platform pages (YouTube/TikTok) are not supported without a downloader.
 app.post("/api/upload/from-url", async (req: any, res: any) => {
@@ -950,20 +1152,40 @@ app.post("/api/upload/from-url", async (req: any, res: any) => {
         error: "Links to YouTube/TikTok/Instagram pages can't be imported yet. Download the video and upload the file, or paste a direct link to an .mp4 file.",
       });
     }
-    const resp = await fetch(u.toString());
+    if (!(await isPublicHost(u.hostname))) return res.status(400).json({ success: false, error: "That link can't be imported." });
+    const resp = await fetch(u.toString(), { redirect: "manual" });
     const type = resp.headers.get("content-type") || "";
-    if (!resp.ok) return res.status(400).json({ success: false, error: `Couldn't download that link (HTTP ${resp.status}).` });
+    if (resp.status >= 300 && resp.status < 400) {
+      return res.status(400).json({ success: false, error: "That link redirects. Paste the final direct link to the video file." });
+    }
+    if (!resp.ok || !resp.body) return res.status(400).json({ success: false, error: `Couldn't download that link (HTTP ${resp.status}).` });
     if (!/^(video|application\/octet-stream)/i.test(type)) {
       return res.status(400).json({ success: false, error: "That link isn't a video file. Paste a direct link to an .mp4/.mov file." });
     }
-    const MAX = 1024 * 1024 * 1024;
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length > MAX) return res.status(413).json({ success: false, error: "Video is larger than 1 GB." });
+    const declared = Number(resp.headers.get("content-length") || 0);
+    if (declared > UPLOAD_MAX_BYTES) return res.status(413).json({ success: false, error: `Video is larger than ${UPLOAD_MAX_LABEL}.` });
     const base = (path.basename(u.pathname) || "linked_video.mp4").replace(/[^a-zA-Z0-9._-]/g, "_");
-    const originalname = path.extname(base) ? base : `${base}.mp4`;
+    const originalname = MEDIA_EXTS.has(path.extname(base).toLowerCase()) ? base : `${base}.mp4`;
     const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${originalname}`);
-    fs.writeFileSync(filePath, buf);
-    req.files = [{ originalname, path: filePath, size: buf.length, mimetype: type.startsWith("video/") ? type : "video/mp4" }];
+    // Stream to disk with a hard cap instead of buffering the whole file in memory.
+    let written = 0;
+    const { Readable, Transform } = await import("stream");
+    const { pipeline } = await import("stream/promises");
+    const cap = new Transform({
+      transform(chunk, _enc, cb) {
+        written += chunk.length;
+        if (written > UPLOAD_MAX_BYTES) return cb(new Error("TOO_LARGE"));
+        cb(null, chunk);
+      },
+    });
+    try {
+      await pipeline(Readable.fromWeb(resp.body as any), cap, fs.createWriteStream(filePath));
+    } catch (e: any) {
+      fs.rmSync(filePath, { force: true });
+      if (e?.message === "TOO_LARGE") return res.status(413).json({ success: false, error: `Video is larger than ${UPLOAD_MAX_LABEL}.` });
+      throw e;
+    }
+    req.files = [{ originalname, path: filePath, size: written, mimetype: type.startsWith("video/") ? type : "video/mp4" }];
     return handleUploadedFiles(req, res);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "Failed to import link" });
@@ -1163,6 +1385,7 @@ function deleteUserMedia(userId: string, ids: string[]): number {
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
       const thumb = path.join(STORAGE_DIRS.thumbnails, `${name}.jpg`);
       if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
+      void deleteFromBlob([fp, thumb]);
       if (db.fileOwners) { delete db.fileOwners[name]; delete db.fileOwners[`${name}.jpg`]; }
     } catch (e: any) {
       console.warn("media file cleanup failed:", e?.message);
@@ -1422,6 +1645,130 @@ app.put("/api/projects/:id", (req: any, res) => {
   res.json({ success: true, project: db.projects[projectIdx] });
 });
 
+// ---- Deleting projects and accounts ----
+const STORAGE_REF_RE = /\/storage\/(uploads|renders|clips|thumbnails|audio|subtitles)\/([^?#"'\s\\]+)/g;
+function storageRefsIn(value: any): Array<{ dir: string; name: string }> {
+  const out = new Map<string, { dir: string; name: string }>();
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  let m: RegExpExecArray | null;
+  STORAGE_REF_RE.lastIndex = 0;
+  while ((m = STORAGE_REF_RE.exec(text))) {
+    let name = m[2];
+    try { name = decodeURIComponent(name); } catch {}
+    name = path.basename(name);
+    if (name && !name.startsWith(".")) out.set(`${m[1]}/${name}`, { dir: m[1], name });
+  }
+  return Array.from(out.values());
+}
+
+/**
+ * Delete storage files (local copy + Blob) that belong to `userId` and that nothing kept
+ * still points at. A file owned by someone else, or with no recorded owner, is never deleted.
+ */
+async function deleteUnreferencedUserFiles(db: any, userId: string, candidates: Array<{ dir: string; name: string }>) {
+  if (!userId || candidates.length === 0) return 0;
+  const stillUsed = JSON.stringify([db.projects || [], db.media || [], db.mediaRecords || [], db.jobs || [], db.scheduledPosts || []]);
+  const ownerOf = (name: string) => {
+    const fo = db.fileOwners?.[name];
+    if (fo) return fo;
+    const rec = (db.mediaRecords || []).find((r: any) => r?.filename === name);
+    return rec?.userId || "";
+  };
+  const doomed: string[] = [];
+  for (const { dir, name } of candidates) {
+    const base = name.endsWith(".jpg") && dir === "thumbnails" ? name.slice(0, -4) : name;
+    if (ownerOf(name) !== userId && ownerOf(base) !== userId) continue;
+    if (stillUsed.includes(name) || stillUsed.includes(base)) continue;
+    const dirPath = (STORAGE_DIRS as any)[dir];
+    if (!dirPath) continue;
+    doomed.push(path.join(dirPath, name));
+    if (dir !== "thumbnails") doomed.push(path.join(STORAGE_DIRS.thumbnails, `${name}.jpg`));
+    if (db.fileOwners) { delete db.fileOwners[name]; delete db.fileOwners[`${name}.jpg`]; }
+  }
+  for (const fp of doomed) {
+    try { if (fs.existsSync(fp)) fs.unlinkSync(fp); } catch {}
+  }
+  await deleteFromBlob(doomed);
+  return doomed.length;
+}
+
+app.delete("/api/projects/:id", async (req: any, res) => {
+  const userId = currentUserId(req);
+  const db = readDb();
+  const project = (db.projects || []).find((p: any) => p.id === req.params.id);
+  if (!project) return res.status(404).json({ success: false, error: "Project not found" });
+  // Strictly the caller's own projects (admins included).
+  if (!userId || project.userId !== userId) return res.status(403).json({ success: false, error: "Unauthorized access to project" });
+
+  const refs = storageRefsIn(project);
+  for (const r of db.mediaRecords || []) {
+    if (r?.projectId === project.id && r.userId === userId && r.filename) refs.push({ dir: r.mediaType === "render" ? "renders" : "clips", name: path.basename(r.filename) });
+  }
+  db.projects = db.projects.filter((p: any) => p !== project);
+  db.mediaRecords = (db.mediaRecords || []).filter((r: any) => !(r?.projectId === project.id && r.userId === userId));
+  db.jobs = (db.jobs || []).filter((j: any) => !(j?.projectId === project.id && j.userId === userId));
+  // Files still in the user's media library (or used by another project) are kept.
+  const removedFiles = await deleteUnreferencedUserFiles(db, userId, refs);
+  writeDb(db);
+  res.json({ success: true, removedFiles });
+});
+
+// Delete the signed-in user's own account and everything that belongs to it.
+// There is no way to target another user here, admins included.
+app.post("/api/account/delete", async (req: any, res) => {
+  const userId = currentUserId(req);
+  const db = readDb();
+  const user = (db.users || []).find((u: any) => u.id === userId);
+  if (!userId || !user) return res.status(404).json({ success: false, error: "Account not found" });
+  const confirmEmail = String(req.body?.confirmEmail || "").trim().toLowerCase();
+  if (!confirmEmail || confirmEmail !== String(user.email || "").trim().toLowerCase()) {
+    return res.status(400).json({ success: false, error: "Type your account email to confirm." });
+  }
+  if (user.passwordHash && !authService.verifyPassword(user, String(req.body?.password || ""))) {
+    return res.status(403).json({ success: false, error: "Wrong password." });
+  }
+
+  const isMine = (it: any) =>
+    !!it &&
+    typeof it === "object" &&
+    (it.userId === userId || it.ownerId === userId || it.workspaceId === userId || it.user_id === userId || it.hostId === userId);
+  // Podcast sessions this user hosted: remove their recorded chunks (host's and guests').
+  let removedChunks = 0;
+  for (const sess of (db.podcastSessions || []).filter(isMine)) {
+    const sid = String(sess?.id || "");
+    if (!/^sess_[A-Za-z0-9_]{1,64}$/.test(sid)) continue;
+    const dir = path.join(STORAGE_DIRS.podcasts, sid);
+    fs.rmSync(dir, { recursive: true, force: true });
+    removedChunks += await deleteBlobFolder(dir).catch((e: any) => {
+      console.warn("[account] podcast chunk cleanup failed:", e?.message);
+      return 0;
+    });
+  }
+  const refs = storageRefsIn([
+    (db.projects || []).filter(isMine),
+    (db.media || []).filter(isMine),
+    (db.mediaRecords || []).filter(isMine).map((r: any) => `/storage/${r.mediaType === "render" ? "renders" : "clips"}/${r.filename}`),
+  ]);
+  for (const [name, owner] of Object.entries(db.fileOwners || {})) {
+    if (owner !== userId) continue;
+    for (const dir of ["uploads", "renders", "clips", "thumbnails", "audio"]) refs.push({ dir, name });
+  }
+  let removedItems = 0;
+  for (const key of Object.keys(db)) {
+    if (!Array.isArray(db[key])) continue;
+    const before = db[key].length;
+    db[key] = key === "users" ? db[key].filter((u: any) => u?.id !== userId) : db[key].filter((it: any) => !isMine(it));
+    removedItems += before - db[key].length;
+  }
+  for (const key of ["googleCalendarConnections", "googleAnalyticsConnections"]) {
+    if (db[key] && typeof db[key] === "object" && !Array.isArray(db[key]) && userId in db[key]) delete db[key][userId];
+  }
+  const removedFiles = await deleteUnreferencedUserFiles(db, userId, refs);
+  for (const [name, owner] of Object.entries(db.fileOwners || {})) if (owner === userId) delete db.fileOwners[name];
+  writeDb(db);
+  res.json({ success: true, removedItems, removedFiles, removedChunks });
+});
+
 // Update clip captions persistently
 app.post("/api/projects/:id/clips/:clipId/captions", (req: any, res) => {
   const { captions } = req.body;
@@ -1461,7 +1808,13 @@ app.post("/api/render-clip", async (req: any, res) => {
     const isSceneExport = Array.isArray(options?.scenes) && options.scenes.length > 0;
     // An unsaved editor timeline can still render when its source file is in the user's library.
     const ownsSource = !!options?.sourceUrl && !!resolveOwnedMediaPath(String(options.sourceUrl), userId, ["uploads", "renders", "clips"]);
-    if (!owned && !isSceneExport && !ownsSource) return res.status(404).json({ success: false, error: "Project not found" });
+    if (!owned && !isSceneExport && !ownsSource) {
+      // Not a lookup miss on the route: the timeline has nothing this user can render.
+      const error = !options?.sourceUrl
+        ? "Add a video clip to the timeline before exporting."
+        : "This clip's source file isn't in your media library anymore. Re-import it and try again.";
+      return res.status(400).json({ success: false, error });
+    }
     const result = await pipelineManager.renderFinalVideo(
       clipId,
       owned ? projectId : "editor",
@@ -2049,19 +2402,50 @@ Return strict JSON object matching:
 });
 
 // Audio Dictation & Speech Transcription with Gemini Audio Multimodal
-app.post("/api/ai/transcribe-audio", async (req, res) => {
+// The audio arrives either inline (base64, local mode) or, on Vercel, as `blobPath`: a file the
+// browser uploaded to the user's own incoming/ folder (function bodies are capped at 4.5 MB).
+const TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024;
+app.post("/api/ai/transcribe-audio", async (req: any, res) => {
+  const blobPath = typeof req.body?.blobPath === "string" ? req.body.blobPath : "";
+  const userId = currentUserId(req);
+  if (blobPath && (!cloudEnabled || !userId || !blobPath.startsWith(`incoming/${userId}/`) || blobPath.includes(".."))) {
+    return res.status(403).json({ success: false, error: "That upload doesn't belong to you." });
+  }
+  const dropBlob = () => (blobPath ? delBlob(blobPath).catch(() => {}) : Promise.resolve());
   try {
-    const { audioData, mimeType = "audio/webm", context } = req.body;
-    if (!audioData) {
-      return res.status(400).json({ success: false, error: "Audio data (base64) is required." });
+    const { audioData, mimeType = "audio/webm", context } = req.body || {};
+    if (!audioData && !blobPath) {
+      return res.status(400).json({ success: false, error: "Audio is required." });
     }
 
     const ai = getGenAI();
+    if (!ai) {
+      await dropBlob();
+      return res.status(501).json({ success: false, notConfigured: true, error: "Dictation isn't available yet." });
+    }
+
+    let base64Clean = "";
+    if (blobPath) {
+      const blob: any = await getBlob(blobPath, { access: "private", useCache: false });
+      if (!blob || blob.statusCode !== 200 || !blob.stream) return res.status(404).json({ success: false, error: "Upload not found. Please try again." });
+      if (Number(blob.blob?.size || 0) > TRANSCRIBE_MAX_BYTES) {
+        await dropBlob();
+        return res.status(413).json({ success: false, error: "Recording is too long to transcribe." });
+      }
+      const ct = String(blob.blob?.contentType || "");
+      if (!/^(audio|video)\//.test(ct)) {
+        await dropBlob();
+        return res.status(400).json({ success: false, error: "That file isn't audio." });
+      }
+      base64Clean = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString("base64");
+      await dropBlob();
+    } else {
+      // Clean base64 header if present
+      base64Clean = String(audioData).includes(",") ? String(audioData).split(",")[1] : String(audioData);
+    }
     let transcriptText = "";
 
-    if (ai) {
-      // Clean base64 header if present
-      const base64Clean = audioData.includes(",") ? audioData.split(",")[1] : audioData;
+    {
       
       const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
@@ -2087,8 +2471,6 @@ Do not add pleasantries, timestamps, speaker labels, or quotes. Output ONLY the 
       });
 
       transcriptText = response.text ? response.text.trim() : "";
-    } else {
-      transcriptText = "Here is an idea for our upcoming video: let's break down the 3 biggest retention hooks creators can use in 2026.";
     }
 
     res.json({
@@ -2097,6 +2479,7 @@ Do not add pleasantries, timestamps, speaker labels, or quotes. Output ONLY the 
     });
   } catch (err: any) {
     console.error("Transcribe audio error:", err);
+    await dropBlob();
     res.status(500).json({ success: false, error: err.message || "Failed to transcribe audio" });
   }
 });
@@ -2994,18 +3377,15 @@ app.get("/api/live/multistream/status", (req, res) => {
 // LIVE STUDIO RECORDINGS API (Media Library integration)
 // ----------------------------------------------------
 
-app.get("/api/live/recordings", (req, res) => {
-  const recordings = adsAndLiveService.getLiveRecordings();
+app.get("/api/live/recordings", (req: any, res) => {
+  const recordings = adsAndLiveService.getLiveRecordings().filter(ownedBy(req));
   res.json({ success: true, recordings });
 });
 
-app.post("/api/live/recordings", (req, res) => {
-  try {
-    const result = adsAndLiveService.saveLiveRecording(req.body);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+// Live Studio uploads recordings through the normal media upload (direct to Blob on Vercel).
+// This older route only accepted a link to an already-stored file, so it's retired.
+app.post("/api/live/recordings", (_req, res) => {
+  res.status(410).json({ success: false, error: "Save recordings through the media upload instead." });
 });
 
 // ----------------------------------------------------
@@ -3894,4 +4274,8 @@ async function startServer() {
   });
 }
 
-startServer();
+// On Vercel the app is served by a function (api/index); everything else (static files,
+// job pollers) runs only for the long-lived local server.
+if (!process.env.VERCEL) startServer();
+
+export { app };

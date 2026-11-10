@@ -222,16 +222,15 @@ export class PodcastService {
     return { session, event: eventRecord };
   }
 
-  // Save an uploaded chunk from local double-ender recording.
-  // Every path segment is validated so a chunk can only ever land in its own participant folder.
-  public saveChunk(
+  // Where a chunk lives. Every path segment is validated so a chunk can only ever land in
+  // its own participant folder of an existing session.
+  public chunkTarget(
     sessionId: string,
     participantId: string,
     trackType: string,
     chunkIndex: number,
-    buffer: Buffer,
     ext: string = ".webm"
-  ): { success: boolean; chunkPath: string; chunksUploaded: number } {
+  ): { chunkFile: string; chunkFileName: string; relPath: string } {
     if (typeof sessionId !== "string" || !SESSION_ID_RE.test(sessionId)) {
       throw new PodcastError(400, "Invalid session id.");
     }
@@ -267,21 +266,36 @@ export class PodcastService {
     ) {
       throw new PodcastError(400, "Invalid chunk path.");
     }
+    return { chunkFile, chunkFileName, relPath: `podcasts/${sessionId}/${participantId}/${chunkFileName}` };
+  }
 
-    fs.mkdirSync(participantDir, { recursive: true });
-    fs.writeFileSync(chunkFile, buffer);
-
+  // Count a stored chunk toward the participant's upload progress.
+  public recordChunk(sessionId: string, participantId: string, chunkIndex: number, relPath: string) {
+    const db = readDb();
+    const session = (db.podcastSessions || []).find((s: any) => s.id === sessionId);
+    const participant = session && (session.participants || []).find((p: any) => p.id === participantId);
+    if (!participant) throw new PodcastError(404, "Session not found");
     participant.chunksUploaded = Math.max(participant.chunksUploaded || 0, chunkIndex + 1);
     participant.chunksRecorded = Math.max(participant.chunksRecorded || 0, chunkIndex + 1);
     participant.uploadPercentage = Math.min(100, Math.round((participant.chunksUploaded / Math.max(1, participant.chunksRecorded)) * 100));
     participant.isUploading = participant.uploadPercentage < 100;
     writeDb(db);
+    return { success: true, chunkPath: `/storage/${relPath}`, chunksUploaded: participant.chunksUploaded };
+  }
 
-    return {
-      success: true,
-      chunkPath: `/storage/podcasts/${sessionId}/${participantId}/${chunkFileName}`,
-      chunksUploaded: participant.chunksUploaded,
-    };
+  // Save an uploaded chunk from local double-ender recording (multipart upload, local mode).
+  public saveChunk(
+    sessionId: string,
+    participantId: string,
+    trackType: string,
+    chunkIndex: number,
+    buffer: Buffer,
+    ext: string = ".webm"
+  ): { success: boolean; chunkPath: string; chunksUploaded: number } {
+    const target = this.chunkTarget(sessionId, participantId, trackType, chunkIndex, ext);
+    fs.mkdirSync(path.dirname(target.chunkFile), { recursive: true });
+    fs.writeFileSync(target.chunkFile, buffer);
+    return this.recordChunk(sessionId, participantId, chunkIndex, target.relPath);
   }
 
   // Assembling the uploaded chunks into a multitrack editor project (plus transcript and AI clips)
