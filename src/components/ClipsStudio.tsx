@@ -1,3 +1,4 @@
+import { downloadHref } from "../utils/downloadHref";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PlatformChip } from "./PlatformChip";
 import {
@@ -523,7 +524,7 @@ export const ClipsStudio: React.FC<ClipsStudioProps> = ({
                       <button onClick={() => onOpenInEditor({ ...clip, recommendedCrop: aspect })} className="py-1.5 rounded-lg bg-[#171C27] border border-[#272D3A] hover:bg-[#1C222E] text-xs flex items-center justify-center gap-1">
                         <Pencil className="w-3.5 h-3.5" /> Edit
                       </button>
-                      <a href={clipSrc(clip)} download={`${clip.title || clip.id}.mp4`} className="py-1.5 rounded-lg bg-[#171C27] border border-[#272D3A] hover:bg-[#1C222E] text-xs flex items-center justify-center gap-1">
+                      <a href={downloadHref(clipSrc(clip))} download={`${clip.title || clip.id}.mp4`} className="py-1.5 rounded-lg bg-[#171C27] border border-[#272D3A] hover:bg-[#1C222E] text-xs flex items-center justify-center gap-1">
                         <Download className="w-3.5 h-3.5" /> Download
                       </a>
                       <button

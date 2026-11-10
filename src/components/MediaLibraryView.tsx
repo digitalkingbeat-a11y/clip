@@ -1,3 +1,4 @@
+import { downloadHref } from "../utils/downloadHref";
 import React, { useState, useMemo } from "react";
 import {
   FolderOpen,
@@ -465,7 +466,7 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
     selectedMediaItems.forEach((item, idx) => {
       setTimeout(() => {
         const a = document.createElement("a");
-        a.href = item.url;
+        a.href = downloadHref(item.url);
         a.download = item.name;
         a.target = "_blank";
         a.rel = "noreferrer";
@@ -1130,7 +1131,7 @@ export const MediaLibraryView: React.FC<MediaLibraryViewProps> = ({
 
                       <div className="flex items-center gap-1.5">
                         <a
-                          href={item.url}
+                          href={downloadHref(item.url)}
                           download={item.name}
                           target="_blank"
                           rel="noreferrer"

@@ -9,7 +9,8 @@
  *    changes.
  *  - Files under storage/ are mirrored to a private Vercel Blob store under the same path.
  *    New or changed files are pushed before the response is sent; missing files are pulled
- *    on demand (request inputs, /storage downloads stream straight from Blob).
+ *    on demand (request inputs). /storage links redirect to short-lived presigned Blob URLs,
+ *    so large files never pass through a function response (Vercel caps those at 4.5 MB).
  *
  * Off Vercel (local dev, box tests) everything here is a no-op unless CLIPFLOW_CLOUD=1.
  */
@@ -18,7 +19,7 @@ import path from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { neon } from "@neondatabase/serverless";
-import { put, get, del } from "@vercel/blob";
+import { put, get, del, head, list, issueSignedToken, presignUrl } from "@vercel/blob";
 import { DB_FILE_PATH, STORAGE_DIRS, getDbWriteSeq, initStorage } from "./storage";
 
 export const cloudEnabled =
@@ -213,6 +214,17 @@ function walk(dir: string, out: string[]) {
   }
 }
 
+const CONTENT_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+  ".aac": "audio/aac", ".flac": "audio/flac", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".srt": "text/plain", ".vtt": "text/vtt",
+  ".json": "application/json",
+};
+export function blobContentType(p: string): string {
+  return CONTENT_TYPES[path.extname(p).toLowerCase()] || "application/octet-stream";
+}
+
 async function pushFile(p: string, mtime: number) {
   const pathname = blobPathFor(p);
   if (!pathname) return;
@@ -222,7 +234,9 @@ async function pushFile(p: string, mtime: number) {
     addRandomSuffix: false,
     allowOverwrite: true,
     multipart: size > 64 * 1024 * 1024,
+    contentType: blobContentType(p),
   });
+  knownInBlob.set(pathname, Date.now());
   pushedMtime.set(p, mtime);
 }
 
@@ -307,6 +321,48 @@ export async function ensureReferencedFiles(value: any): Promise<void> {
   );
 }
 
+// ---------------------------------------------------------------- presigned delivery
+const knownInBlob = new Map<string, number>(); // pathname -> when we last saw it in Blob
+const readTokens = new Map<string, { delegationToken: string; clientSigningToken: string; validUntil: number }>();
+const TOKEN_TTL_MS = 60 * 60 * 1000;
+const TOKEN_MIN_LEFT_MS = 20 * 60 * 1000;
+
+/** Storage path (under storage/) as its Blob pathname, or null when it isn't a mirrored file. */
+export function blobPathForLocal(localPath: string): string | null {
+  return blobPathFor(localPath);
+}
+
+/**
+ * A short-lived presigned GET URL for a storage file in the private Blob store (read-only,
+ * scoped to that one file). Pushes a local file first if this instance hasn't uploaded it
+ * yet. Returns null when the file isn't anywhere.
+ */
+export async function presignedBlobUrl(localPath: string, opts: { download?: boolean } = {}): Promise<string | null> {
+  if (!cloudEnabled) return null;
+  const pathname = blobPathFor(localPath);
+  if (!pathname) return null;
+  let st: fs.Stats | null = null;
+  try {
+    st = fs.statSync(localPath);
+  } catch {}
+  if (st?.isFile() && pushedMtime.get(localPath) !== st.mtimeMs) {
+    await pushFile(localPath, st.mtimeMs);
+  } else if (!st && Date.now() - (knownInBlob.get(pathname) || 0) > 10 * 60 * 1000) {
+    const meta = await head(pathname).catch(() => null);
+    if (!meta) return null;
+    knownInBlob.set(pathname, Date.now());
+  }
+  const now = Date.now();
+  let tok = readTokens.get(pathname);
+  if (!tok || tok.validUntil - now < TOKEN_MIN_LEFT_MS) {
+    tok = await issueSignedToken({ pathname, operations: ["get"], validUntil: now + TOKEN_TTL_MS });
+    readTokens.set(pathname, tok);
+    if (readTokens.size > 5000) readTokens.delete(readTokens.keys().next().value as string);
+  }
+  const { presignedUrl } = await presignUrl(tok, { operation: "get", pathname, access: "private" });
+  return opts.download ? `${presignedUrl}&download=1` : presignedUrl;
+}
+
 /** Stream a storage file from Blob (with Range support). Returns false when it isn't there. */
 export async function streamFromBlob(localPath: string, req: any, res: any, contentType: string): Promise<boolean> {
   if (!cloudEnabled) return false;
@@ -332,12 +388,37 @@ export async function streamFromBlob(localPath: string, req: any, res: any, cont
   return true;
 }
 
+/** Remove every Blob file under a local storage folder (e.g. a podcast session's chunks). */
+export async function deleteBlobFolder(localDir: string): Promise<number> {
+  if (!cloudEnabled) return 0;
+  const prefix = blobPathFor(path.join(localDir, "x"))?.replace(/x$/, "");
+  if (!prefix) return 0;
+  let removed = 0;
+  let cursor: string | undefined;
+  do {
+    const page: any = await list({ prefix, cursor, limit: 1000 });
+    const names = (page.blobs || []).map((b: any) => b.pathname);
+    if (names.length) await del(names);
+    removed += names.length;
+    for (const n of names) {
+      knownInBlob.delete(n);
+      readTokens.delete(n);
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return removed;
+}
+
 /** Remove storage files from Blob (after the app deletes them locally). */
 export async function deleteFromBlob(localPaths: string[]): Promise<void> {
   if (!cloudEnabled) return;
   const names = localPaths.map((p) => blobPathFor(p)).filter(Boolean) as string[];
   if (names.length) await del(names).catch((e) => console.warn("[cloudSync] delete failed:", e?.message));
   for (const p of localPaths) pushedMtime.delete(p);
+  for (const n of names) {
+    knownInBlob.delete(n);
+    readTokens.delete(n);
+  }
 }
 
 /**

@@ -1,3 +1,4 @@
+import { downloadHref } from "../utils/downloadHref";
 import React, { useState, useEffect } from "react";
 import {
   X,
@@ -267,7 +268,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   const downloadClip = (url?: string, filename?: string) => {
     if (!url) return;
     const a = document.createElement("a");
-    a.href = url;
+    a.href = downloadHref(url);
     a.download = filename || "ClipFlow_Master_916.mp4";
     a.target = "_blank";
     document.body.appendChild(a);

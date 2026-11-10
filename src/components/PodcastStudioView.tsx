@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { uploadPodcastChunk } from "../utils/mediaUpload";
 import {
   Mic,
   MicOff,
@@ -754,16 +755,11 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
 
             // Upload chunk in background
             if (activeSession) {
-              const formData = new FormData();
-              formData.append("chunk", e.data, `chunk_${currentIdx}.webm`);
-              formData.append("participantId", myParticipantId || "");
-              formData.append("trackType", "video");
-              formData.append("chunkIndex", String(currentIdx));
-
               try {
-                const res = await fetch(`/api/podcast/sessions/${activeSession.id}/chunks`, {
-                  method: "POST",
-                  body: formData,
+                const res = await uploadPodcastChunk(activeSession.id, e.data, {
+                  participantId: myParticipantId || "",
+                  trackType: "video",
+                  chunkIndex: currentIdx,
                 });
                 if (res.ok) {
                   setChunksUploadedCount((prev) => prev + 1);
@@ -857,13 +853,12 @@ export const PodcastStudioView: React.FC<PodcastStudioViewProps> = ({
     const pending = [...failedChunksRef.current];
     failedChunksRef.current = [];
     for (const item of pending) {
-      const formData = new FormData();
-      formData.append("chunk", item.blob, `chunk_${item.idx}.webm`);
-      formData.append("participantId", myParticipantId || "");
-      formData.append("trackType", "video");
-      formData.append("chunkIndex", String(item.idx));
       try {
-        const res = await fetch(`/api/podcast/sessions/${activeSession.id}/chunks`, { method: "POST", body: formData });
+        const res = await uploadPodcastChunk(activeSession.id, item.blob, {
+          participantId: myParticipantId || "",
+          trackType: "video",
+          chunkIndex: item.idx,
+        });
         if (res.ok) setChunksUploadedCount((prev) => prev + 1);
         else failedChunksRef.current.push(item);
       } catch {

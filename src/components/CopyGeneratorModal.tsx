@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { directUploadsEnabled, uploadIncomingBlob } from "../utils/mediaUpload";
 import {
   X,
   Sparkles,
@@ -197,41 +198,45 @@ export const CopyGeneratorModal: React.FC<CopyGeneratorModalProps> = ({
         setDictationState("processing");
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         
-        // Convert to base64
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64Audio = reader.result as string;
-          try {
-            const res = await fetch("/api/ai/transcribe-audio", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                audioData: base64Audio,
-                mimeType: "audio/webm",
-                context: clip ? clip.title : "social media video caption",
-              }),
+        const context = clip ? clip.title : "social media video caption";
+        try {
+          let body: any;
+          if (await directUploadsEnabled()) {
+            // Cloud hosting: the recording goes to private storage first (request bodies are capped).
+            body = { blobPath: await uploadIncomingBlob(audioBlob, "dictation.webm"), mimeType: "audio/webm", context };
+          } else {
+            const base64Audio = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(audioBlob);
             });
-            const data = await res.json();
-            if (data.success && data.transcript) {
-              setGeneratedCopy((prev) => {
-                const prevCaption = prev.caption.trim();
-                const newCaption = prevCaption
-                  ? `${prevCaption} ${data.transcript}`
-                  : data.transcript;
-                return { ...prev, caption: newCaption };
-              });
-            } else if (data.error) {
-              setDictationError(data.error);
-            }
-          } catch (e: any) {
-            console.error("Transcribe failed:", e);
-            setDictationError("Transcription failed. Please try again.");
-          } finally {
-            setDictationState("idle");
-            setInterimTranscript("");
+            body = { audioData: base64Audio, mimeType: "audio/webm", context };
           }
-        };
-        reader.readAsDataURL(audioBlob);
+          const res = await fetch("/api/ai/transcribe-audio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (data.success && data.transcript) {
+            setGeneratedCopy((prev) => {
+              const prevCaption = prev.caption.trim();
+              const newCaption = prevCaption
+                ? `${prevCaption} ${data.transcript}`
+                : data.transcript;
+              return { ...prev, caption: newCaption };
+            });
+          } else if (data.error) {
+            setDictationError(data.error);
+          }
+        } catch (e: any) {
+          console.error("Transcribe failed:", e);
+          setDictationError("Transcription failed. Please try again.");
+        } finally {
+          setDictationState("idle");
+          setInterimTranscript("");
+        }
       };
 
       mediaRecorder.start();

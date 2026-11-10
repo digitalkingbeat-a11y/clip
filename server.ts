@@ -10,9 +10,9 @@ import { GoogleGenAI } from "@google/genai";
 
 import { initStorage, readDb, writeDb, STORAGE_DIRS } from "./server/storage";
 import { ffmpegService } from "./server/ffmpeg";
-import { cloudEnabled, cloudSyncMiddleware, streamFromBlob, deleteFromBlob } from "./server/cloudSync";
+import { cloudEnabled, cloudSyncMiddleware, streamFromBlob, deleteFromBlob, presignedBlobUrl, blobPathForLocal, deleteBlobFolder } from "./server/cloudSync";
 import { handleUpload } from "@vercel/blob/client";
-import { get as getBlob, del as delBlob } from "@vercel/blob";
+import { get as getBlob, del as delBlob, head as headBlob } from "@vercel/blob";
 import { transcriptionService } from "./server/transcription";
 import { clipAnalyzer } from "./server/clipAnalyzer";
 import { pipelineManager } from "./server/pipeline";
@@ -228,6 +228,20 @@ async function serveSignedStorageFile(storagePath: string, query: Record<string,
   if (!check.ok && !(await bearerUserOwns(req, path.basename(safePath)))) {
     return storageAccessDenied(res, check.reason);
   }
+  if (cloudEnabled && req.method === "GET") {
+    // Cloud: send the browser straight to a short-lived, read-only presigned Blob URL for
+    // this one file, so big media never flows through a function response (4.5 MB cap).
+    const url = await presignedBlobUrl(safePath, { download: String(query?.download || "") === "1" }).catch((e: any) => {
+      console.warn("[storage] presign failed:", e?.message);
+      return null;
+    });
+    if (url) {
+      res.setHeader("Cache-Control", "private, max-age=300");
+      res.setHeader("Referrer-Policy", "no-referrer");
+      return res.redirect(302, url);
+    }
+    if (!fs.existsSync(safePath)) return res.status(404).json({ success: false, error: "Media file not found." });
+  }
   if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
     // Not on this instance's disk: stream it from cloud storage (Vercel Blob).
     res.setHeader("Cache-Control", "private, max-age=3600");
@@ -379,7 +393,7 @@ const PUBLIC_API_PATTERNS: RegExp[] = [
   /^\/api\/billing\/(plans|credit-packs|webhook)$/,
   /^\/api\/oauth\/google\/callback$/,
   /^\/api\/integrations\/google\/calendar\/webhook$/,
-  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks))?$/,
+  /^\/api\/podcast\/sessions\/[^/]+(\/(join|chunks|chunks\/token|chunks\/complete))?$/,
 ];
 function isPublicApiRequest(req: any): boolean {
   const p = req.path || "";
@@ -662,6 +676,64 @@ app.post("/api/podcast/sessions/:id/chunks", podcastChunkUpload.single("chunk"),
   } catch (err: any) {
     const status = podcastErrorStatus(err, 500);
     if (status >= 500) console.error("Error saving chunk:", err);
+    res.status(status).json({ success: false, error: err.message });
+  }
+});
+
+// 6b. Cloud (Vercel): chunks go browser -> Blob directly (function bodies are capped at 4.5 MB).
+// The token is only issued for this session's own participant folder and exact chunk name.
+const PODCAST_CHUNK_MAX_BYTES = 100 * 1024 * 1024;
+const PODCAST_CHUNK_TYPES = ["video/webm", "audio/webm", "video/mp4", "audio/mp4", "audio/ogg", "audio/wav"];
+function podcastChunkFields(src: any) {
+  const idxRaw = String(src?.chunkIndex ?? "");
+  return {
+    participantId: String(src?.participantId || ""),
+    trackType: String(src?.trackType || "video"),
+    chunkIndex: /^\d{1,6}$/.test(idxRaw) ? Number(idxRaw) : NaN,
+    ext: src?.ext ? String(src.ext) : ".webm",
+  };
+}
+app.post("/api/podcast/sessions/:id/chunks/token", async (req: any, res) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const sessionId = String(req.params.id || "");
+  try {
+    const result = await handleUpload({
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async (pathname: string, clientPayload: string | null) => {
+        let payload: any = {};
+        try {
+          payload = JSON.parse(clientPayload || "{}");
+        } catch {}
+        const f = podcastChunkFields(payload);
+        const target = podcastService.chunkTarget(sessionId, f.participantId, f.trackType, f.chunkIndex, f.ext);
+        if (pathname !== blobPathForLocal(target.chunkFile)) throw new PodcastError(400, "Invalid chunk path.");
+        return {
+          allowedContentTypes: PODCAST_CHUNK_TYPES,
+          maximumSizeInBytes: PODCAST_CHUNK_MAX_BYTES,
+          addRandomSuffix: false,
+          allowOverwrite: true, // a retried chunk replaces its own earlier copy
+        };
+      },
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(podcastErrorStatus(err, 400)).json({ success: false, error: err?.message || "Upload could not be started." });
+  }
+});
+app.post("/api/podcast/sessions/:id/chunks/complete", async (req: any, res) => {
+  if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
+  const sessionId = String(req.params.id || "");
+  try {
+    const f = podcastChunkFields(req.body);
+    const target = podcastService.chunkTarget(sessionId, f.participantId, f.trackType, f.chunkIndex, f.ext);
+    const meta: any = await headBlob(blobPathForLocal(target.chunkFile) as string).catch(() => null);
+    if (!meta || !(meta.size > 0)) return res.status(404).json({ success: false, error: "Chunk upload not found. Please retry." });
+    if (meta.size > PODCAST_CHUNK_MAX_BYTES) return res.status(413).json({ success: false, error: "Chunk is too large." });
+    res.json(podcastService.recordChunk(sessionId, f.participantId, f.chunkIndex, target.relPath));
+  } catch (err: any) {
+    const status = podcastErrorStatus(err, 500);
+    if (status >= 500) console.error("Error recording chunk:", err);
     res.status(status).json({ success: false, error: err.message });
   }
 });
@@ -962,7 +1034,15 @@ app.get("/api/upload/config", (req: any, res: any) => {
   res.json({ success: true, direct: cloudEnabled });
 });
 
-const UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+// A Vercel function has ~500 MB of /tmp for the imported file, its thumbnail and renders.
+const UPLOAD_MAX_MB = Number(process.env.CLIPFLOW_MAX_UPLOAD_MB) || (process.env.VERCEL ? 450 : 2048);
+const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
+const UPLOAD_MAX_LABEL = UPLOAD_MAX_MB >= 1024 ? `${Math.round(UPLOAD_MAX_MB / 1024)} GB` : `${UPLOAD_MAX_MB} MB`;
+const MEDIA_EXTS = new Set([
+  ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi",
+  ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac",
+  ".png", ".jpg", ".jpeg", ".webp", ".gif",
+]);
 app.post("/api/blob/upload", async (req: any, res: any) => {
   if (!cloudEnabled) return res.status(404).json({ success: false, error: "Direct uploads aren't enabled here." });
   const userId = currentUserId(req);
@@ -974,7 +1054,7 @@ app.post("/api/blob/upload", async (req: any, res: any) => {
       onBeforeGenerateToken: async (pathname: string) => {
         if (!pathname.startsWith(`incoming/${userId}/`)) throw new Error("Invalid upload path.");
         return {
-          allowedContentTypes: ["video/*", "audio/*", "image/*", "application/octet-stream"],
+          allowedContentTypes: ["video/*", "audio/*", "image/png", "image/jpeg", "image/webp", "image/gif", "application/octet-stream"],
           maximumSizeInBytes: UPLOAD_MAX_BYTES,
           addRandomSuffix: true,
         };
@@ -1002,8 +1082,16 @@ app.post("/api/upload/from-blob", async (req: any, res: any) => {
       if (!blob || blob.statusCode !== 200 || !blob.stream) {
         return res.status(404).json({ success: false, error: "Upload not found. Please try again." });
       }
-      if (Number(blob.blob?.size || 0) > UPLOAD_MAX_BYTES) return res.status(413).json({ success: false, error: "File is larger than 2 GB." });
       const originalname = String(f?.originalname || path.basename(pathname)).slice(0, 200);
+      const blobType = String(blob.blob?.contentType || "");
+      if (Number(blob.blob?.size || 0) > UPLOAD_MAX_BYTES) {
+        await delBlob(pathname).catch(() => {});
+        return res.status(413).json({ success: false, error: `File is larger than ${UPLOAD_MAX_LABEL}.` });
+      }
+      if (!MEDIA_EXTS.has(path.extname(originalname).toLowerCase()) || !/^(video\/|audio\/|image\/(png|jpe?g|webp|gif)$|application\/octet-stream)/.test(blobType || "application/octet-stream")) {
+        await delBlob(pathname).catch(() => {});
+        return res.status(415).json({ success: false, error: "Invalid file format. Please upload video, audio, or image media files." });
+      }
       const safe = originalname.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
       const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${safe}`);
       const { Readable } = await import("stream");
@@ -1018,6 +1106,33 @@ app.post("/api/upload/from-blob", async (req: any, res: any) => {
   req.files = files;
   return handleUploadedFiles(req, res);
 });
+
+// Only fetch links on the public internet (no localhost, private networks or cloud metadata).
+async function isPublicHost(hostname: string): Promise<boolean> {
+  const net = await import("net");
+  const dns = await import("dns/promises");
+  const host = hostname.replace(/^\[|\]$/g, "");
+  if (!host || /^(localhost|.*\.local|.*\.internal)$/i.test(host)) return false;
+  let addrs: string[] = [];
+  if (net.isIP(host)) addrs = [host];
+  else {
+    try {
+      addrs = (await dns.lookup(host, { all: true })).map((a) => a.address);
+    } catch {
+      return false;
+    }
+  }
+  const priv = (ip: string) => {
+    if (net.isIPv4(ip)) {
+      const [a, b] = ip.split(".").map(Number);
+      return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+    }
+    const v = ip.toLowerCase();
+    if (v.startsWith("::ffff:")) return priv(v.slice(7));
+    return v === "::1" || v === "::" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80");
+  };
+  return addrs.length > 0 && !addrs.some(priv);
+}
 
 // Import a video from a direct link (e.g. https://.../video.mp4) and run the same clip pipeline.
 // Platform pages (YouTube/TikTok) are not supported without a downloader.
@@ -1037,20 +1152,40 @@ app.post("/api/upload/from-url", async (req: any, res: any) => {
         error: "Links to YouTube/TikTok/Instagram pages can't be imported yet. Download the video and upload the file, or paste a direct link to an .mp4 file.",
       });
     }
-    const resp = await fetch(u.toString());
+    if (!(await isPublicHost(u.hostname))) return res.status(400).json({ success: false, error: "That link can't be imported." });
+    const resp = await fetch(u.toString(), { redirect: "manual" });
     const type = resp.headers.get("content-type") || "";
-    if (!resp.ok) return res.status(400).json({ success: false, error: `Couldn't download that link (HTTP ${resp.status}).` });
+    if (resp.status >= 300 && resp.status < 400) {
+      return res.status(400).json({ success: false, error: "That link redirects. Paste the final direct link to the video file." });
+    }
+    if (!resp.ok || !resp.body) return res.status(400).json({ success: false, error: `Couldn't download that link (HTTP ${resp.status}).` });
     if (!/^(video|application\/octet-stream)/i.test(type)) {
       return res.status(400).json({ success: false, error: "That link isn't a video file. Paste a direct link to an .mp4/.mov file." });
     }
-    const MAX = 1024 * 1024 * 1024;
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length > MAX) return res.status(413).json({ success: false, error: "Video is larger than 1 GB." });
+    const declared = Number(resp.headers.get("content-length") || 0);
+    if (declared > UPLOAD_MAX_BYTES) return res.status(413).json({ success: false, error: `Video is larger than ${UPLOAD_MAX_LABEL}.` });
     const base = (path.basename(u.pathname) || "linked_video.mp4").replace(/[^a-zA-Z0-9._-]/g, "_");
-    const originalname = path.extname(base) ? base : `${base}.mp4`;
+    const originalname = MEDIA_EXTS.has(path.extname(base).toLowerCase()) ? base : `${base}.mp4`;
     const filePath = path.join(STORAGE_DIRS.uploads, `${Date.now()}_${originalname}`);
-    fs.writeFileSync(filePath, buf);
-    req.files = [{ originalname, path: filePath, size: buf.length, mimetype: type.startsWith("video/") ? type : "video/mp4" }];
+    // Stream to disk with a hard cap instead of buffering the whole file in memory.
+    let written = 0;
+    const { Readable, Transform } = await import("stream");
+    const { pipeline } = await import("stream/promises");
+    const cap = new Transform({
+      transform(chunk, _enc, cb) {
+        written += chunk.length;
+        if (written > UPLOAD_MAX_BYTES) return cb(new Error("TOO_LARGE"));
+        cb(null, chunk);
+      },
+    });
+    try {
+      await pipeline(Readable.fromWeb(resp.body as any), cap, fs.createWriteStream(filePath));
+    } catch (e: any) {
+      fs.rmSync(filePath, { force: true });
+      if (e?.message === "TOO_LARGE") return res.status(413).json({ success: false, error: `Video is larger than ${UPLOAD_MAX_LABEL}.` });
+      throw e;
+    }
+    req.files = [{ originalname, path: filePath, size: written, mimetype: type.startsWith("video/") ? type : "video/mp4" }];
     return handleUploadedFiles(req, res);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "Failed to import link" });
@@ -1594,7 +1729,21 @@ app.post("/api/account/delete", async (req: any, res) => {
   }
 
   const isMine = (it: any) =>
-    !!it && typeof it === "object" && (it.userId === userId || it.ownerId === userId || it.workspaceId === userId || it.user_id === userId);
+    !!it &&
+    typeof it === "object" &&
+    (it.userId === userId || it.ownerId === userId || it.workspaceId === userId || it.user_id === userId || it.hostId === userId);
+  // Podcast sessions this user hosted: remove their recorded chunks (host's and guests').
+  let removedChunks = 0;
+  for (const sess of (db.podcastSessions || []).filter(isMine)) {
+    const sid = String(sess?.id || "");
+    if (!/^sess_[A-Za-z0-9_]{1,64}$/.test(sid)) continue;
+    const dir = path.join(STORAGE_DIRS.podcasts, sid);
+    fs.rmSync(dir, { recursive: true, force: true });
+    removedChunks += await deleteBlobFolder(dir).catch((e: any) => {
+      console.warn("[account] podcast chunk cleanup failed:", e?.message);
+      return 0;
+    });
+  }
   const refs = storageRefsIn([
     (db.projects || []).filter(isMine),
     (db.media || []).filter(isMine),
@@ -1617,7 +1766,7 @@ app.post("/api/account/delete", async (req: any, res) => {
   const removedFiles = await deleteUnreferencedUserFiles(db, userId, refs);
   for (const [name, owner] of Object.entries(db.fileOwners || {})) if (owner === userId) delete db.fileOwners[name];
   writeDb(db);
-  res.json({ success: true, removedItems, removedFiles });
+  res.json({ success: true, removedItems, removedFiles, removedChunks });
 });
 
 // Update clip captions persistently
@@ -2253,19 +2402,50 @@ Return strict JSON object matching:
 });
 
 // Audio Dictation & Speech Transcription with Gemini Audio Multimodal
-app.post("/api/ai/transcribe-audio", async (req, res) => {
+// The audio arrives either inline (base64, local mode) or, on Vercel, as `blobPath`: a file the
+// browser uploaded to the user's own incoming/ folder (function bodies are capped at 4.5 MB).
+const TRANSCRIBE_MAX_BYTES = 20 * 1024 * 1024;
+app.post("/api/ai/transcribe-audio", async (req: any, res) => {
+  const blobPath = typeof req.body?.blobPath === "string" ? req.body.blobPath : "";
+  const userId = currentUserId(req);
+  if (blobPath && (!cloudEnabled || !userId || !blobPath.startsWith(`incoming/${userId}/`) || blobPath.includes(".."))) {
+    return res.status(403).json({ success: false, error: "That upload doesn't belong to you." });
+  }
+  const dropBlob = () => (blobPath ? delBlob(blobPath).catch(() => {}) : Promise.resolve());
   try {
-    const { audioData, mimeType = "audio/webm", context } = req.body;
-    if (!audioData) {
-      return res.status(400).json({ success: false, error: "Audio data (base64) is required." });
+    const { audioData, mimeType = "audio/webm", context } = req.body || {};
+    if (!audioData && !blobPath) {
+      return res.status(400).json({ success: false, error: "Audio is required." });
     }
 
     const ai = getGenAI();
+    if (!ai) {
+      await dropBlob();
+      return res.status(501).json({ success: false, notConfigured: true, error: "Dictation isn't available yet." });
+    }
+
+    let base64Clean = "";
+    if (blobPath) {
+      const blob: any = await getBlob(blobPath, { access: "private", useCache: false });
+      if (!blob || blob.statusCode !== 200 || !blob.stream) return res.status(404).json({ success: false, error: "Upload not found. Please try again." });
+      if (Number(blob.blob?.size || 0) > TRANSCRIBE_MAX_BYTES) {
+        await dropBlob();
+        return res.status(413).json({ success: false, error: "Recording is too long to transcribe." });
+      }
+      const ct = String(blob.blob?.contentType || "");
+      if (!/^(audio|video)\//.test(ct)) {
+        await dropBlob();
+        return res.status(400).json({ success: false, error: "That file isn't audio." });
+      }
+      base64Clean = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString("base64");
+      await dropBlob();
+    } else {
+      // Clean base64 header if present
+      base64Clean = String(audioData).includes(",") ? String(audioData).split(",")[1] : String(audioData);
+    }
     let transcriptText = "";
 
-    if (ai) {
-      // Clean base64 header if present
-      const base64Clean = audioData.includes(",") ? audioData.split(",")[1] : audioData;
+    {
       
       const response = await generateContentWithRetry(ai, {
         model: "gemini-3.8-flash",
@@ -2291,8 +2471,6 @@ Do not add pleasantries, timestamps, speaker labels, or quotes. Output ONLY the 
       });
 
       transcriptText = response.text ? response.text.trim() : "";
-    } else {
-      transcriptText = "Here is an idea for our upcoming video: let's break down the 3 biggest retention hooks creators can use in 2026.";
     }
 
     res.json({
@@ -2301,6 +2479,7 @@ Do not add pleasantries, timestamps, speaker labels, or quotes. Output ONLY the 
     });
   } catch (err: any) {
     console.error("Transcribe audio error:", err);
+    await dropBlob();
     res.status(500).json({ success: false, error: err.message || "Failed to transcribe audio" });
   }
 });
@@ -3198,18 +3377,15 @@ app.get("/api/live/multistream/status", (req, res) => {
 // LIVE STUDIO RECORDINGS API (Media Library integration)
 // ----------------------------------------------------
 
-app.get("/api/live/recordings", (req, res) => {
-  const recordings = adsAndLiveService.getLiveRecordings();
+app.get("/api/live/recordings", (req: any, res) => {
+  const recordings = adsAndLiveService.getLiveRecordings().filter(ownedBy(req));
   res.json({ success: true, recordings });
 });
 
-app.post("/api/live/recordings", (req, res) => {
-  try {
-    const result = adsAndLiveService.saveLiveRecording(req.body);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+// Live Studio uploads recordings through the normal media upload (direct to Blob on Vercel).
+// This older route only accepted a link to an already-stored file, so it's retired.
+app.post("/api/live/recordings", (_req, res) => {
+  res.status(410).json({ success: false, error: "Save recordings through the media upload instead." });
 });
 
 // ----------------------------------------------------

@@ -59,3 +59,69 @@ export async function uploadMediaFiles(files: File[], opts: { library?: boolean;
     body: JSON.stringify({ files: uploaded }),
   });
 }
+
+/** True when uploads should go browser → Blob (cloud hosting). */
+export function directUploadsEnabled(): Promise<boolean> {
+  return useDirectUploads();
+}
+
+function authHeaders(): Record<string, string> | undefined {
+  const token = localStorage.getItem("clipflow_auth_token") || "";
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
+}
+
+/**
+ * Upload one double-ender recording chunk (host or guest). On Vercel the chunk goes straight
+ * to Blob at its own session/participant path, then the server checks it and counts it.
+ */
+export async function uploadPodcastChunk(
+  sessionId: string,
+  chunk: Blob,
+  fields: { participantId: string; trackType: "video" | "audio"; chunkIndex: number; ext?: string }
+): Promise<Response> {
+  const ext = fields.ext || ".webm";
+  const sid = encodeURIComponent(sessionId);
+  if (!(await useDirectUploads())) {
+    const fd = new FormData();
+    fd.append("chunk", chunk, `chunk_${fields.chunkIndex}${ext}`);
+    fd.append("participantId", fields.participantId);
+    fd.append("trackType", fields.trackType);
+    fd.append("chunkIndex", String(fields.chunkIndex));
+    fd.append("ext", ext);
+    return fetch(`/api/podcast/sessions/${sid}/chunks`, { method: "POST", body: fd });
+  }
+  const payload = { participantId: fields.participantId, trackType: fields.trackType, chunkIndex: String(fields.chunkIndex), ext };
+  const pathname = `storage/podcasts/${sessionId}/${fields.participantId}/${fields.trackType}_chunk_${fields.chunkIndex}${ext}`;
+  const baseType = (chunk.type || "").split(";")[0] || `${fields.trackType}/webm`;
+  await upload(pathname, chunk, {
+    access: "private",
+    handleUploadUrl: `/api/podcast/sessions/${sid}/chunks/token`,
+    clientPayload: JSON.stringify(payload),
+    headers: authHeaders(),
+    contentType: baseType,
+    multipart: chunk.size > 50 * 1024 * 1024,
+  });
+  return fetch(`/api/podcast/sessions/${sid}/chunks/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Put a temporary file (e.g. dictation audio) into the signed-in user's private incoming
+ * folder and return its pathname, for routes that take `blobPath` instead of a body upload.
+ */
+export async function uploadIncomingBlob(file: Blob, name: string): Promise<string> {
+  const userId = currentUserId();
+  if (!userId) throw new Error("Sign in to continue.");
+  const safe = name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
+  const blob = await upload(`incoming/${userId}/${Date.now()}_${safe}`, file, {
+    access: "private",
+    handleUploadUrl: "/api/blob/upload",
+    headers: authHeaders(),
+    contentType: (file.type || "").split(";")[0] || undefined,
+    multipart: file.size > 50 * 1024 * 1024,
+  });
+  return blob.pathname;
+}
